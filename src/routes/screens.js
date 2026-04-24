@@ -18,6 +18,28 @@ router.post('/activate', async (req, res) => {
   }
 });
 
+router.get('/:id/content', async (req, res) => {
+  try {
+    const sp = await pool.query(
+      'SELECT playlist_id FROM screen_playlists WHERE screen_id = $1 LIMIT 1',
+      [req.params.id]
+    );
+    if (sp.rows.length === 0) return res.json({ items: [] });
+    const items = await pool.query(
+      `SELECT pi.*, m.filename, m.url, m.type, m.duration 
+       FROM playlist_items pi 
+       JOIN media m ON pi.media_id = m.id 
+       WHERE pi.playlist_id = $1 
+       ORDER BY pi.position ASC`,
+      [sp.rows[0].playlist_id]
+    );
+    res.json({ items: items.rows });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Erro ao buscar conteudo' });
+  }
+});
+
 router.use(authMiddleware);
 
 router.get('/', async (req, res) => {
