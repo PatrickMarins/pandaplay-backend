@@ -55,6 +55,20 @@ router.post('/:id/items', async (req, res) => {
   }
 });
 
+router.delete('/:id/items/:itemId', async (req, res) => {
+  try {
+    const playlist = await pool.query(
+      'SELECT id FROM playlists WHERE id = $1 AND client_id = $2',
+      [req.params.id, req.client.id]
+    );
+    if (playlist.rows.length === 0) return res.status(404).json({ error: 'Playlist não encontrada' });
+    await pool.query('DELETE FROM playlist_items WHERE id = $1', [req.params.itemId]);
+    res.json({ message: 'Item removido' });
+  } catch (err) {
+    res.status(500).json({ error: 'Erro ao remover item' });
+  }
+});
+
 router.delete('/:id', async (req, res) => {
   try {
     const result = await pool.query('DELETE FROM playlists WHERE id = $1 AND client_id = $2 RETURNING id', [req.params.id, req.client.id]);
