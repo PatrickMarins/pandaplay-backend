@@ -3,6 +3,7 @@ const router = express.Router();
 const pool = require('../models/db');
 const authMiddleware = require('../middleware/auth');
 
+// Rotas públicas — sem token
 router.post('/activate', async (req, res) => {
   const { activation_code } = req.body;
   if (!activation_code) return res.status(400).json({ error: 'Codigo de ativacao obrigatorio' });
@@ -40,6 +41,19 @@ router.get('/:id/content', async (req, res) => {
   }
 });
 
+router.post('/:id/heartbeat', async (req, res) => {
+  try {
+    await pool.query(
+      'UPDATE screens SET status = $1, last_seen = NOW() WHERE id = $2',
+      ['online', req.params.id]
+    );
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: 'Erro ao registrar heartbeat' });
+  }
+});
+
+// Rotas protegidas
 router.use(authMiddleware);
 
 router.get('/', async (req, res) => {
@@ -63,6 +77,21 @@ router.post('/', async (req, res) => {
     res.status(201).json(result.rows[0]);
   } catch (err) {
     res.status(500).json({ error: 'Erro ao criar tela' });
+  }
+});
+
+router.post('/:id/playlist', async (req, res) => {
+  const { playlist_id } = req.body;
+  if (!playlist_id) return res.status(400).json({ error: 'playlist_id obrigatorio' });
+  try {
+    await pool.query('DELETE FROM screen_playlists WHERE screen_id = $1', [req.params.id]);
+    await pool.query(
+      'INSERT INTO screen_playlists (screen_id, playlist_id) VALUES ($1, $2)',
+      [req.params.id, playlist_id]
+    );
+    res.json({ message: 'Playlist atribuida com sucesso' });
+  } catch (err) {
+    res.status(500).json({ error: 'Erro ao atribuir playlist' });
   }
 });
 
