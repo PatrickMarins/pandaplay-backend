@@ -6,8 +6,13 @@ const authMiddleware = require('../middleware/auth');
 router.use(authMiddleware);
 
 router.get('/', async (req, res) => {
+  const { company_id } = req.query;
   try {
-    const result = await pool.query('SELECT * FROM playlists WHERE client_id = $1 ORDER BY created_at DESC', [req.client.id]);
+    let query = 'SELECT * FROM playlists WHERE client_id = $1';
+    const params = [req.client.id];
+    if (company_id) { query += ' AND company_id = $2'; params.push(company_id); }
+    query += ' ORDER BY created_at DESC';
+    const result = await pool.query(query, params);
     res.json(result.rows);
   } catch (err) {
     res.status(500).json({ error: 'Erro ao buscar playlists' });
@@ -15,10 +20,13 @@ router.get('/', async (req, res) => {
 });
 
 router.post('/', async (req, res) => {
-  const { name } = req.body;
-  if (!name) return res.status(400).json({ error: 'Nome da playlist é obrigatório' });
+  const { name, company_id } = req.body;
+  if (!name) return res.status(400).json({ error: 'Nome obrigatorio' });
   try {
-    const result = await pool.query('INSERT INTO playlists (client_id, name) VALUES ($1, $2) RETURNING *', [req.client.id, name]);
+    const result = await pool.query(
+      'INSERT INTO playlists (client_id, company_id, name) VALUES ($1, $2, $3) RETURNING *',
+      [req.client.id, company_id || null, name]
+    );
     res.status(201).json(result.rows[0]);
   } catch (err) {
     res.status(500).json({ error: 'Erro ao criar playlist' });
@@ -28,7 +36,7 @@ router.post('/', async (req, res) => {
 router.get('/:id', async (req, res) => {
   try {
     const playlist = await pool.query('SELECT * FROM playlists WHERE id = $1 AND client_id = $2', [req.params.id, req.client.id]);
-    if (playlist.rows.length === 0) return res.status(404).json({ error: 'Playlist não encontrada' });
+    if (playlist.rows.length === 0) return res.status(404).json({ error: 'Playlist nao encontrada' });
     const items = await pool.query(
       `SELECT pi.*, m.filename, m.url, m.type, m.duration FROM playlist_items pi JOIN media m ON pi.media_id = m.id WHERE pi.playlist_id = $1 ORDER BY pi.position ASC`,
       [req.params.id]
@@ -41,10 +49,10 @@ router.get('/:id', async (req, res) => {
 
 router.post('/:id/items', async (req, res) => {
   const { media_id, position, duration_override } = req.body;
-  if (!media_id) return res.status(400).json({ error: 'media_id é obrigatório' });
+  if (!media_id) return res.status(400).json({ error: 'media_id obrigatorio' });
   try {
     const playlist = await pool.query('SELECT id FROM playlists WHERE id = $1 AND client_id = $2', [req.params.id, req.client.id]);
-    if (playlist.rows.length === 0) return res.status(404).json({ error: 'Playlist não encontrada' });
+    if (playlist.rows.length === 0) return res.status(404).json({ error: 'Playlist nao encontrada' });
     const result = await pool.query(
       'INSERT INTO playlist_items (playlist_id, media_id, position, duration_override) VALUES ($1, $2, $3, $4) RETURNING *',
       [req.params.id, media_id, position || 0, duration_override || null]
@@ -57,11 +65,8 @@ router.post('/:id/items', async (req, res) => {
 
 router.delete('/:id/items/:itemId', async (req, res) => {
   try {
-    const playlist = await pool.query(
-      'SELECT id FROM playlists WHERE id = $1 AND client_id = $2',
-      [req.params.id, req.client.id]
-    );
-    if (playlist.rows.length === 0) return res.status(404).json({ error: 'Playlist não encontrada' });
+    const playlist = await pool.query('SELECT id FROM playlists WHERE id = $1 AND client_id = $2', [req.params.id, req.client.id]);
+    if (playlist.rows.length === 0) return res.status(404).json({ error: 'Playlist nao encontrada' });
     await pool.query('DELETE FROM playlist_items WHERE id = $1', [req.params.itemId]);
     res.json({ message: 'Item removido' });
   } catch (err) {
@@ -72,7 +77,7 @@ router.delete('/:id/items/:itemId', async (req, res) => {
 router.delete('/:id', async (req, res) => {
   try {
     const result = await pool.query('DELETE FROM playlists WHERE id = $1 AND client_id = $2 RETURNING id', [req.params.id, req.client.id]);
-    if (result.rows.length === 0) return res.status(404).json({ error: 'Playlist não encontrada' });
+    if (result.rows.length === 0) return res.status(404).json({ error: 'Playlist nao encontrada' });
     res.json({ message: 'Playlist removida' });
   } catch (err) {
     res.status(500).json({ error: 'Erro ao remover playlist' });
