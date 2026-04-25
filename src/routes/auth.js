@@ -15,7 +15,7 @@ router.post('/register', async (req, res) => {
     const password_hash = await bcrypt.hash(password, 10);
     const result = await pool.query(
       `INSERT INTO clients (name, email, password_hash, status, trial_ends_at)
-       VALUES ($1, $2, $3, 'active', NOW() + INTERVAL '14 days')
+       VALUES ($1, $2, $3, 'pending', NULL)
        RETURNING id, name, email, status, trial_ends_at, created_at`,
       [name, email, password_hash]
     );
@@ -40,6 +40,10 @@ router.post('/login', async (req, res) => {
     if (!validPassword) return res.status(401).json({ error: 'Email ou senha incorretos' });
     if (client.status === 'blocked')
       return res.status(403).json({ error: 'Conta bloqueada. Entre em contato com o suporte.' });
+    if (client.status === 'pending')
+      return res.status(403).json({ error: 'Conta aguardando aprovação. Em breve você receberá acesso.' });
+    if (client.trial_ends_at && new Date(client.trial_ends_at) < new Date())
+      return res.status(403).json({ error: 'Seu período de trial expirou. Contrate um plano para continuar.' });
     const token = jwt.sign({ id: client.id, email: client.email }, process.env.JWT_SECRET, { expiresIn: '7d' });
     res.json({
       token,

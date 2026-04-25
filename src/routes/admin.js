@@ -35,15 +35,17 @@ const adminAuth = (req, res, next) => {
 // Dashboard admin
 router.get('/dashboard', adminAuth, async (req, res) => {
   try {
-    const [clients, screens, companies] = await Promise.all([
-      pool.query('SELECT COUNT(*) FROM clients'),
+    const [clients, screens, companies, pending] = await Promise.all([
+      pool.query("SELECT COUNT(*) FROM clients WHERE status != 'pending'"),
       pool.query('SELECT COUNT(*) FROM screens WHERE client_id IS NOT NULL'),
       pool.query('SELECT COUNT(*) FROM companies'),
+      pool.query("SELECT COUNT(*) FROM clients WHERE status = 'pending'"),
     ]);
     res.json({
       total_clients: parseInt(clients.rows[0].count),
       total_screens: parseInt(screens.rows[0].count),
       total_companies: parseInt(companies.rows[0].count),
+      pending_clients: parseInt(pending.rows[0].count),
     });
   } catch (err) {
     res.status(500).json({ error: 'Erro ao buscar dashboard' });
@@ -64,6 +66,30 @@ router.get('/clients', adminAuth, async (req, res) => {
     res.json(result.rows);
   } catch (err) {
     res.status(500).json({ error: 'Erro ao buscar clientes' });
+  }
+});
+
+// Aprovar cliente com trial definido pelo admin
+router.put('/clients/:id/approve', adminAuth, async (req, res) => {
+  const { trial_days, plan_id } = req.body;
+  try {
+    let trial_ends_at = null;
+    if (trial_days && parseInt(trial_days) > 0) {
+      trial_ends_at = new Date();
+      trial_ends_at.setDate(trial_ends_at.getDate() + parseInt(trial_days));
+    }
+    await pool.query(
+      `UPDATE clients SET 
+        status = 'active',
+        trial_ends_at = $1,
+        trial_days = $2,
+        plan_id = COALESCE($3, plan_id)
+       WHERE id = $4`,
+      [trial_ends_at, trial_days || 0, plan_id || null, req.params.id]
+    );
+    res.json({ message: 'Cliente aprovado com sucesso' });
+  } catch (err) {
+    res.status(500).json({ error: 'Erro ao aprovar cliente' });
   }
 });
 
@@ -102,7 +128,7 @@ router.get('/plans', adminAuth, async (req, res) => {
   }
 });
 
-// Criar/editar plano
+// Criar plano
 router.post('/plans', adminAuth, async (req, res) => {
   const { name, description, max_screens, max_companies, price } = req.body;
   try {
@@ -116,6 +142,7 @@ router.post('/plans', adminAuth, async (req, res) => {
   }
 });
 
+// Editar plano
 router.put('/plans/:id', adminAuth, async (req, res) => {
   const { name, description, max_screens, max_companies, price, active } = req.body;
   try {
