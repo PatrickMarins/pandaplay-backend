@@ -4,7 +4,6 @@ const pool = require('../models/db');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 
-// Login admin
 router.post('/login', async (req, res) => {
   const { email, password } = req.body;
   try {
@@ -20,7 +19,6 @@ router.post('/login', async (req, res) => {
   }
 });
 
-// Middleware admin
 const adminAuth = (req, res, next) => {
   const token = req.headers.authorization?.split(' ')[1];
   if (!token) return res.status(401).json({ error: 'Token obrigatorio' });
@@ -32,7 +30,6 @@ const adminAuth = (req, res, next) => {
   } catch { res.status(401).json({ error: 'Token invalido' }); }
 };
 
-// Dashboard admin
 router.get('/dashboard', adminAuth, async (req, res) => {
   try {
     const [clients, screens, companies, pending] = await Promise.all([
@@ -52,11 +49,13 @@ router.get('/dashboard', adminAuth, async (req, res) => {
   }
 });
 
-// Listar clientes
 router.get('/clients', adminAuth, async (req, res) => {
   try {
     const result = await pool.query(`
-      SELECT c.*, p.name as plan_name, p.max_screens,
+      SELECT 
+        c.id, c.name, c.email, c.status, c.plan_id,
+        c.trial_ends_at, c.trial_days, c.blocked_at, c.blocked_reason, c.created_at,
+        p.name as plan_name, p.max_screens,
         (SELECT COUNT(*) FROM screens s WHERE s.client_id = c.id) as screen_count,
         (SELECT COUNT(*) FROM companies co WHERE co.client_id = c.id) as company_count
       FROM clients c
@@ -69,7 +68,6 @@ router.get('/clients', adminAuth, async (req, res) => {
   }
 });
 
-// Aprovar cliente com trial definido pelo admin
 router.put('/clients/:id/approve', adminAuth, async (req, res) => {
   const { trial_days, plan_id } = req.body;
   try {
@@ -93,7 +91,6 @@ router.put('/clients/:id/approve', adminAuth, async (req, res) => {
   }
 });
 
-// Bloquear / desbloquear cliente
 router.put('/clients/:id/block', adminAuth, async (req, res) => {
   const { blocked, reason } = req.body;
   try {
@@ -107,7 +104,6 @@ router.put('/clients/:id/block', adminAuth, async (req, res) => {
   }
 });
 
-// Atribuir plano ao cliente
 router.put('/clients/:id/plan', adminAuth, async (req, res) => {
   const { plan_id } = req.body;
   try {
@@ -118,7 +114,6 @@ router.put('/clients/:id/plan', adminAuth, async (req, res) => {
   }
 });
 
-// Listar planos
 router.get('/plans', adminAuth, async (req, res) => {
   try {
     const result = await pool.query('SELECT * FROM plans ORDER BY max_screens ASC');
@@ -128,7 +123,6 @@ router.get('/plans', adminAuth, async (req, res) => {
   }
 });
 
-// Criar plano
 router.post('/plans', adminAuth, async (req, res) => {
   const { name, description, max_screens, max_companies, price } = req.body;
   try {
@@ -142,7 +136,6 @@ router.post('/plans', adminAuth, async (req, res) => {
   }
 });
 
-// Editar plano
 router.put('/plans/:id', adminAuth, async (req, res) => {
   const { name, description, max_screens, max_companies, price, active } = req.body;
   try {
