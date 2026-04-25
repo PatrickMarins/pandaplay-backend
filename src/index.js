@@ -9,6 +9,7 @@ app.use(cors());
 app.use(express.json());
 
 app.use('/api/auth', require('./routes/auth'));
+app.use('/api/companies', require('./routes/companies'));
 app.use('/api/screens', require('./routes/screens'));
 app.use('/api/media', require('./routes/media'));
 app.use('/api/playlists', require('./routes/playlists'));
