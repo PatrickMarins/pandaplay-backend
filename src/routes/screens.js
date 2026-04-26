@@ -62,11 +62,15 @@ router.get('/:id/content', async (req, res) => {
 });
 
 router.post('/:id/heartbeat', async (req, res) => {
+  const { app_version } = req.body;
   try {
-    await pool.query('UPDATE screens SET status = $1, last_seen = NOW() WHERE id = $2', ['online', req.params.id]);
+    await pool.query(
+      'UPDATE screens SET status = $1, last_seen = NOW(), app_version = COALESCE($2, app_version) WHERE id = $3',
+      ['online', app_version || null, req.params.id]
+    );
     res.json({ ok: true });
   } catch (err) {
-    res.status(500).json({ error: 'Erro ao registrar heartbeat' });
+    res.status(500).json({ error: 'Erro no heartbeat' });
   }
 });
 
