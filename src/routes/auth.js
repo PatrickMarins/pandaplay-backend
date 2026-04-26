@@ -175,5 +175,8 @@ router.put('/profile', require('../middleware/auth'), async (req, res) => {
   } catch (err) {
     res.status(500).json({ error: 'Erro ao atualizar perfil' });
   }
+});router.post('/photo', require('../middleware/auth'), async (req, res) => {
+  // Por enquanto retorna placeholder — implementar com Supabase Storage
+  res.json({ photo_url: null, message: 'Em breve' });
 });
 module.exports = router;
