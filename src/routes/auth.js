@@ -3,12 +3,44 @@ const router = express.Router();
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const pool = require('../models/db');
-const { Resend } = require('resend');
+const Brevo = require('@getbrevo/brevo');
 
-const RESEND_KEY = process.env.RESEND_API_KEY || 're_JBEd6HfF_Nfk3PE3AZN1vyTbLtxtoVCxv';
+const BREVO_KEY = process.env.BREVO_API_KEY || '';
 
-function getResend() {
-  return new Resend(RESEND_KEY);
+async function sendCode(email, code, type) {
+  const subject = type === 'register' ? 'Confirme seu cadastro — PandaPlay' : 'Recuperação de senha — PandaPlay';
+  const title = type === 'register' ? 'Confirme seu email' : 'Redefinir senha';
+  const message = type === 'register'
+    ? 'Use o código abaixo para confirmar seu cadastro no PandaPlay:'
+    : 'Use o código abaixo para redefinir sua senha:';
+
+  const client = Brevo.ApiClient.instance;
+  client.authentications['api-key'].apiKey = BREVO_KEY;
+
+  const api = new Brevo.TransactionalEmailsApi();
+  await api.sendTransacEmail({
+    sender: { name: 'PandaPlay', email: 'noreply@pandaplay.com.br' },
+    to: [{ email }],
+    subject,
+    htmlContent: `
+      <div style="font-family: Inter, sans-serif; max-width: 480px; margin: 0 auto; padding: 40px 24px; background: #f4f4f8;">
+        <div style="background: white; border-radius: 16px; padding: 40px; box-shadow: 0 4px 24px rgba(0,0,0,0.08);">
+          <div style="text-align: center; margin-bottom: 32px;">
+            <div style="display: inline-block; background: linear-gradient(135deg, #7c5cfc, #a855f7); border-radius: 12px; padding: 12px 20px;">
+              <span style="color: white; font-size: 20px; font-weight: 800;">PandaPlay</span>
+            </div>
+          </div>
+          <h2 style="color: #0f0f1a; font-size: 22px; font-weight: 700; margin-bottom: 8px;">${title}</h2>
+          <p style="color: #4a4a6a; font-size: 14px; line-height: 1.7; margin-bottom: 28px;">${message}</p>
+          <div style="background: #f0f0f5; border: 2px dashed #7c5cfc; border-radius: 12px; padding: 24px; text-align: center; margin-bottom: 28px;">
+            <div style="font-size: 42px; font-weight: 800; letter-spacing: 10px; color: #7c5cfc; font-family: monospace;">${code}</div>
+          </div>
+          <p style="color: #9090b0; font-size: 13px; text-align: center;">Este código expira em <strong>15 minutos</strong>. Não compartilhe com ninguém.</p>
+        </div>
+        <p style="color: #9090b0; font-size: 12px; text-align: center; margin-top: 20px;">Se você não solicitou isso, ignore este email.</p>
+      </div>
+    `
+  });
 }
 
 function generateCode() {
