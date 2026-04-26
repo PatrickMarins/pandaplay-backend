@@ -3,17 +3,7 @@ const router = express.Router();
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const pool = require('../models/db');
-const nodemailer = require('nodemailer');
-
-const mailer = nodemailer.createTransport({
-  host: 'smtp-relay.brevo.com',
-  port: 465,
-  secure: true,
-  auth: {
-    user: 'a95947001@smtp-brevo.com',
-    pass: process.env.SMTP_PASS || ''
-  }
-});
+const axios = require('axios');
 
 function generateCode() {
   return Math.floor(100000 + Math.random() * 900000).toString();
@@ -30,11 +20,11 @@ async function sendCode(email, code, type) {
     ? 'Use o código abaixo para confirmar seu cadastro no PandaPlay:'
     : 'Use o código abaixo para redefinir sua senha:';
 
-  await mailer.sendMail({
-    from: '"PandaPlay" <a95947001@smtp-brevo.com>',
-    to: email,
+  await axios.post('https://api.brevo.com/v3/smtp/email', {
+    sender: { name: 'PandaPlay', email: 'arnaldo.patrick@gmail.com' },
+    to: [{ email }],
     subject,
-    html: `
+    htmlContent: `
       <div style="font-family: Inter, sans-serif; max-width: 480px; margin: 0 auto; padding: 40px 24px; background: #f4f4f8;">
         <div style="background: white; border-radius: 16px; padding: 40px; box-shadow: 0 4px 24px rgba(0,0,0,0.08);">
           <div style="text-align: center; margin-bottom: 32px;">
@@ -52,6 +42,11 @@ async function sendCode(email, code, type) {
         <p style="color: #9090b0; font-size: 12px; text-align: center; margin-top: 20px;">Se você não solicitou isso, ignore este email.</p>
       </div>
     `
+  }, {
+    headers: {
+      'api-key': process.env.BREVO_API_KEY || '',
+      'Content-Type': 'application/json'
+    }
   });
 }
 
@@ -74,7 +69,7 @@ router.post('/send-verification', async (req, res) => {
     await sendCode(email, code, 'register');
     res.json({ message: 'Código enviado para seu email' });
   } catch (err) {
-    console.error(err);
+    console.error(err?.response?.data || err.message || err);
     res.status(500).json({ error: 'Erro ao enviar email. Tente novamente.' });
   }
 });
@@ -149,7 +144,7 @@ router.post('/forgot-password', async (req, res) => {
     await sendCode(email, code, 'reset');
     res.json({ message: 'Se este email estiver cadastrado, você receberá um código.' });
   } catch (err) {
-    console.error(err);
+    console.error(err?.response?.data || err.message || err);
     res.status(500).json({ error: 'Erro ao enviar email. Tente novamente.' });
   }
 });
