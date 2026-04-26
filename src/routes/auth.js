@@ -74,6 +74,7 @@ router.get('/me', require('../middleware/auth'), async (req, res) => {
     res.status(500).json({ error: 'Erro interno do servidor' });
   }
 });
+
 router.get('/stats', require('../middleware/auth'), async (req, res) => {
   try {
     const clientId = req.client.id;
@@ -155,6 +156,24 @@ router.get('/stats', require('../middleware/auth'), async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Erro ao buscar estatísticas' });
+  }
+});
+router.put('/profile', require('../middleware/auth'), async (req, res) => {
+  const { name, old_password, new_password } = req.body;
+  try {
+    const result = await pool.query('SELECT * FROM clients WHERE id = $1', [req.client.id]);
+    const client = result.rows[0];
+    if (old_password && new_password) {
+      const valid = await bcrypt.compare(old_password, client.password_hash);
+      if (!valid) return res.status(400).json({ error: 'Senha atual incorreta' });
+      const hash = await bcrypt.hash(new_password, 10);
+      await pool.query('UPDATE clients SET name = $1, password_hash = $2 WHERE id = $3', [name, hash, req.client.id]);
+    } else {
+      await pool.query('UPDATE clients SET name = $1 WHERE id = $2', [name, req.client.id]);
+    }
+    res.json({ message: 'Perfil atualizado' });
+  } catch (err) {
+    res.status(500).json({ error: 'Erro ao atualizar perfil' });
   }
 });
 module.exports = router;
