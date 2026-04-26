@@ -109,7 +109,7 @@ router.get('/', async (req, res) => {
   }
 });
 
-rrouter.post('/link', async (req, res) => {
+router.post('/link', async (req, res) => {
   const { activation_code, name, company_id } = req.body;
   if (!activation_code) return res.status(400).json({ error: 'Codigo obrigatorio' });
   if (!company_id) return res.status(400).json({ error: 'company_id obrigatorio' });
