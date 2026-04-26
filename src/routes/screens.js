@@ -43,6 +43,13 @@ router.get('/status/:activation_code', async (req, res) => {
 
 router.get('/:id/content', async (req, res) => {
   try {
+    // Verifica se a tela ainda está vinculada
+    const screenCheck = await pool.query(
+      'SELECT client_id FROM screens WHERE id = $1', [req.params.id]
+    );
+    if (screenCheck.rows.length === 0) return res.json({ unlinked: true, items: [] });
+    if (!screenCheck.rows[0].client_id) return res.json({ unlinked: true, items: [] });
+
     const sp = await pool.query(
       'SELECT playlist_id FROM screen_playlists WHERE screen_id = $1 LIMIT 1',
       [req.params.id]
