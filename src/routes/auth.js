@@ -5,8 +5,10 @@ const jwt = require('jsonwebtoken');
 const pool = require('../models/db');
 const { Resend } = require('resend');
 
+const RESEND_KEY = process.env.RESEND_API_KEY || 're_JBEd6HfF_Nfk3PE3AZN1vyTbLtxtoVCxv';
+
 function getResend() {
-  return new Resend(process.env.RESEND_API_KEY);
+  return new Resend(RESEND_KEY);
 }
 
 function generateCode() {
@@ -66,9 +68,7 @@ router.post('/send-verification', async (req, res) => {
     const code = generateCode();
     const expiresAt = new Date(Date.now() + 15 * 60 * 1000);
 
-    // Remove códigos anteriores deste email
     await pool.query('DELETE FROM email_verifications WHERE email = $1 AND type = $2', [email, 'register']);
-
     await pool.query(
       'INSERT INTO email_verifications (email, code, type, expires_at) VALUES ($1, $2, $3, $4)',
       [email, code, 'register', expiresAt]
@@ -158,7 +158,6 @@ router.post('/forgot-password', async (req, res) => {
     return res.status(400).json({ error: 'Email inválido' });
   try {
     const result = await pool.query('SELECT id FROM clients WHERE email = $1', [email]);
-    // Sempre retorna sucesso para não revelar se email existe
     if (result.rows.length === 0)
       return res.json({ message: 'Se este email estiver cadastrado, você receberá um código.' });
 
