@@ -33,7 +33,8 @@ router.get('/status/:activation_code', async (req, res) => {
     );
     if (result.rows.length === 0) return res.status(404).json({ error: 'Codigo invalido' });
     const screen = result.rows[0];
-    if (!screen.client_id) return res.json({ linked: false });
+    // Se foi desvinculado (client_id removido), retorna unlinked
+    if (!screen.client_id) return res.json({ linked: false, unlinked: true });
     res.json({ linked: true, screen });
   } catch (err) {
     res.status(500).json({ error: 'Erro ao verificar status' });
@@ -47,6 +48,7 @@ router.get('/:id/content', async (req, res) => {
       [req.params.id]
     );
     if (sp.rows.length === 0) return res.json({ items: [] });
+    const playlist = await pool.query('SELECT name FROM playlists WHERE id = $1', [sp.rows[0].playlist_id]);
     const items = await pool.query(
       `SELECT pi.*, m.filename, m.url, m.type, m.duration, pi.duration_override
        FROM playlist_items pi 
@@ -55,18 +57,27 @@ router.get('/:id/content', async (req, res) => {
        ORDER BY pi.position ASC`,
       [sp.rows[0].playlist_id]
     );
-    res.json({ items: items.rows });
+    res.json({ 
+      items: items.rows,
+      playlist_name: playlist.rows[0]?.name || null
+    });
   } catch (err) {
     res.status(500).json({ error: 'Erro ao buscar conteudo' });
   }
 });
 
 router.post('/:id/heartbeat', async (req, res) => {
-  const { app_version } = req.body;
+  const { app_version, current_file, playlist_name } = req.body;
   try {
     await pool.query(
-      'UPDATE screens SET status = $1, last_seen = NOW(), app_version = COALESCE($2, app_version) WHERE id = $3',
-      ['online', app_version || null, req.params.id]
+      `UPDATE screens SET 
+        status = 'online', 
+        last_seen = NOW(), 
+        app_version = COALESCE($1, app_version),
+        current_file = COALESCE($2, current_file),
+        current_playlist = COALESCE($3, current_playlist)
+       WHERE id = $4`,
+      [app_version || null, current_file || null, playlist_name || null, req.params.id]
     );
     res.json({ ok: true });
   } catch (err) {
@@ -106,6 +117,61 @@ router.post('/link', async (req, res) => {
     res.json(result.rows[0]);
   } catch (err) {
     res.status(500).json({ error: 'Erro ao vincular tela' });
+  }
+});
+
+// Desvincular TV — app volta para tela de código
+router.post('/:id/unlink', async (req, res) => {
+  try {
+    const result = await pool.query(
+      `UPDATE screens SET client_id = NULL, company_id = NULL, status = 'pending', 
+        current_file = NULL, current_playlist = NULL
+       WHERE id = $1 AND client_id = $2 RETURNING id`,
+      [req.params.id, req.client.id]
+    );
+    if (result.rows.length === 0) return res.status(404).json({ error: 'Tela nao encontrada' });
+    res.json({ message: 'Tela desvinculada' });
+  } catch (err) {
+    res.status(500).json({ error: 'Erro ao desvincular tela' });
+  }
+});
+
+// Substituir TV — mantém configurações, troca o dispositivo físico
+router.post('/:id/replace', async (req, res) => {
+  const { activation_code } = req.body;
+  if (!activation_code) return res.status(400).json({ error: 'Codigo obrigatorio' });
+  try {
+    // Busca a tela atual para pegar configurações
+    const current = await pool.query('SELECT * FROM screens WHERE id = $1 AND client_id = $2', [req.params.id, req.client.id]);
+    if (current.rows.length === 0) return res.status(404).json({ error: 'Tela nao encontrada' });
+    
+    // Busca a nova tela pelo código
+    const newScreen = await pool.query('SELECT id, client_id FROM screens WHERE activation_code = $1', [activation_code]);
+    if (newScreen.rows.length === 0) return res.status(404).json({ error: 'Codigo invalido' });
+    if (newScreen.rows[0].client_id) return res.status(409).json({ error: 'Este dispositivo ja esta vinculado' });
+
+    const old = current.rows[0];
+
+    // Migra playlists para nova tela
+    await pool.query('UPDATE screen_playlists SET screen_id = $1 WHERE screen_id = $2', [newScreen.rows[0].id, req.params.id]);
+
+    // Atualiza nova tela com configs da antiga
+    await pool.query(
+      `UPDATE screens SET 
+        client_id = $1, company_id = $2, name = $3, status = 'offline',
+        rotation = $4, audio = $5, transition = $6,
+        auto_start = $7, auto_monitor = $8, show_status = $9, show_alerts = $10
+       WHERE id = $11`,
+      [old.client_id, old.company_id, old.name, old.rotation, old.audio, old.transition,
+       old.auto_start, old.auto_monitor, old.show_status, old.show_alerts, newScreen.rows[0].id]
+    );
+
+    // Remove a tela antiga
+    await pool.query('DELETE FROM screens WHERE id = $1', [req.params.id]);
+
+    res.json({ message: 'TV substituída com sucesso', new_screen_id: newScreen.rows[0].id });
+  } catch (err) {
+    res.status(500).json({ error: 'Erro ao substituir tela' });
   }
 });
 
