@@ -5,7 +5,9 @@ const jwt = require('jsonwebtoken');
 const pool = require('../models/db');
 const { Resend } = require('resend');
 
-const resend = new Resend(process.env.RESEND_API_KEY);
+function getResend() {
+  return new Resend(process.env.RESEND_API_KEY);
+}
 
 function generateCode() {
   return Math.floor(100000 + Math.random() * 900000).toString();
@@ -22,7 +24,7 @@ async function sendCode(email, code, type) {
     ? 'Use o código abaixo para confirmar seu cadastro no PandaPlay:'
     : 'Use o código abaixo para redefinir sua senha:';
 
-  await resend.emails.send({
+  await getResend().emails.send({
     from: 'onboarding@resend.dev',
     to: email,
     subject,
