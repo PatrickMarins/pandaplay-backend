@@ -83,5 +83,34 @@ router.delete('/:id', async (req, res) => {
     res.status(500).json({ error: 'Erro ao remover playlist' });
   }
 });
+// Atualizar item da playlist
+router.put('/:id/items/:itemId', async (req, res) => {
+  const { duration_override, repeat_times, audio_enabled } = req.body;
+  try {
+    await pool.query(
+      `UPDATE playlist_items SET 
+        duration_override = COALESCE($1, duration_override),
+        repeat_times = COALESCE($2, repeat_times),
+        audio_enabled = COALESCE($3, audio_enabled)
+       WHERE id = $4`,
+      [duration_override, repeat_times, audio_enabled, req.params.itemId]
+    );
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: 'Erro ao atualizar item' });
+  }
+});
 
+// Reordenar itens da playlist
+router.put('/:id/reorder', async (req, res) => {
+  const { order } = req.body;
+  try {
+    await Promise.all(order.map(({ id, position }) =>
+      pool.query('UPDATE playlist_items SET position = $1 WHERE id = $2', [position, id])
+    ));
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: 'Erro ao reordenar' });
+  }
+});
 module.exports = router;
