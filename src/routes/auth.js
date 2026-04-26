@@ -7,10 +7,12 @@ const nodemailer = require('nodemailer');
 
 const mailer = nodemailer.createTransport({
   host: 'smtp-relay.brevo.com',
-  port: 587,
+  port: 465,
+  secure: true,
   auth: {
     user: 'a95947001@smtp-brevo.com',
-pass: process.env.SMTP_PASS || ''  }
+    pass: process.env.SMTP_PASS || ''
+  }
 });
 
 function generateCode() {
