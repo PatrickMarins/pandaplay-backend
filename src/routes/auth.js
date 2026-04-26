@@ -19,7 +19,7 @@ async function sendCode(email, code, type) {
 
   const api = new Brevo.TransactionalEmailsApi();
   await api.sendTransacEmail({
-    sender: { name: 'PandaPlay', email: 'noreply@pandaplay.com.br' },
+    sender: { name: 'PandaPlay', email: 'arnaldo.patrick@gmail.com' },
     to: [{ email }],
     subject,
     htmlContent: `
