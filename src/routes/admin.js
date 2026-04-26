@@ -148,5 +148,27 @@ router.put('/plans/:id', adminAuth, async (req, res) => {
     res.status(500).json({ error: 'Erro ao atualizar plano' });
   }
 });
+// Excluir cliente
+router.delete('/clients/:id', adminAuth, async (req, res) => {
+  try {
+    // Remove dados relacionados primeiro
+    const client = await pool.query('SELECT id FROM clients WHERE id = $1', [req.params.id]);
+    if (client.rows.length === 0) return res.status(404).json({ error: 'Cliente não encontrado' });
+    
+    await pool.query('DELETE FROM screen_playlists WHERE screen_id IN (SELECT id FROM screens WHERE client_id = $1)', [req.params.id]);
+    await pool.query('DELETE FROM playlist_items WHERE playlist_id IN (SELECT id FROM playlists WHERE client_id = $1)', [req.params.id]);
+    await pool.query('DELETE FROM screens WHERE client_id = $1', [req.params.id]);
+    await pool.query('DELETE FROM media WHERE client_id = $1', [req.params.id]);
+    await pool.query('DELETE FROM playlists WHERE client_id = $1', [req.params.id]);
+    await pool.query('DELETE FROM companies WHERE client_id = $1', [req.params.id]);
+    await pool.query('DELETE FROM invoices WHERE client_id = $1', [req.params.id]);
+    await pool.query('DELETE FROM clients WHERE id = $1', [req.params.id]);
+    
+    res.json({ message: 'Cliente excluído com sucesso' });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Erro ao excluir cliente' });
+  }
+});
 
 module.exports = { router, adminAuth };

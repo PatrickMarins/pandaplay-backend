@@ -109,11 +109,29 @@ router.get('/', async (req, res) => {
   }
 });
 
-router.post('/link', async (req, res) => {
+rrouter.post('/link', async (req, res) => {
   const { activation_code, name, company_id } = req.body;
   if (!activation_code) return res.status(400).json({ error: 'Codigo obrigatorio' });
   if (!company_id) return res.status(400).json({ error: 'company_id obrigatorio' });
   try {
+    // Verifica limite do plano
+    const clientData = await pool.query(`
+      SELECT c.id, p.max_screens,
+        (SELECT COUNT(*) FROM screens s WHERE s.client_id = c.id) as screen_count
+      FROM clients c
+      LEFT JOIN plans p ON p.id = c.plan_id
+      WHERE c.id = $1
+    `, [req.client.id]);
+
+    if (clientData.rows.length > 0) {
+      const { max_screens, screen_count } = clientData.rows[0];
+      if (max_screens && parseInt(screen_count) >= parseInt(max_screens)) {
+        return res.status(403).json({ 
+          error: `Limite de telas atingido. Seu plano permite até ${max_screens} tela(s). Faça upgrade para adicionar mais.`
+        });
+      }
+    }
+
     const existing = await pool.query('SELECT id, client_id FROM screens WHERE activation_code = $1', [activation_code]);
     if (existing.rows.length === 0) return res.status(404).json({ error: 'Codigo invalido' });
     if (existing.rows[0].client_id) return res.status(409).json({ error: 'Tela ja vinculada' });
