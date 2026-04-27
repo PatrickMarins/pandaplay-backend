@@ -238,5 +238,18 @@ router.put('/profile', require('../middleware/auth'), async (req, res) => {
 router.post('/photo', require('../middleware/auth'), async (req, res) => {
   res.json({ photo_url: null, message: 'Em breve' });
 });
-
+router.get('/billing-info', require('../middleware/auth'), async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT c.plan_expires_at, c.trial_ends_at, c.status,
+        p.name as plan_name, p.price, p.max_screens, p.max_companies
+      FROM clients c
+      LEFT JOIN plans p ON p.id = c.plan_id
+      WHERE c.id = $1
+    `, [req.client.id]);
+    res.json(result.rows[0] || {});
+  } catch (err) {
+    res.status(500).json({ error: 'Erro ao buscar informações' });
+  }
+});
 module.exports = router;
