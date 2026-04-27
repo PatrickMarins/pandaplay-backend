@@ -238,6 +238,7 @@ router.put('/profile', require('../middleware/auth'), async (req, res) => {
 router.post('/photo', require('../middleware/auth'), async (req, res) => {
   res.json({ photo_url: null, message: 'Em breve' });
 });
+
 router.get('/billing-info', require('../middleware/auth'), async (req, res) => {
   try {
     const result = await pool.query(`
@@ -252,4 +253,19 @@ router.get('/billing-info', require('../middleware/auth'), async (req, res) => {
     res.status(500).json({ error: 'Erro ao buscar informações' });
   }
 });
+
+// Faturas do cliente (para o painel do cliente)
+router.get('/invoices', require('../middleware/auth'), async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT id, description, quantia as amount, status, due_date, paid_at, created_at
+       FROM invoices WHERE client_id = $1 ORDER BY created_at DESC`,
+      [req.client.id]
+    );
+    res.json(result.rows);
+  } catch (err) {
+    res.status(500).json({ error: 'Erro ao buscar faturas' });
+  }
+});
+
 module.exports = router;

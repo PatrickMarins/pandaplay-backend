@@ -331,5 +331,84 @@ router.delete('/admins/:id', adminAuth, async (req, res) => {
     res.status(500).json({ error: 'Erro ao remover admin' });
   }
 });
+// ─── FATURAS ─────────────────────────────────────────────────────────────────
 
+// Listar faturas de um cliente
+router.get('/clients/:id/invoices', adminAuth, async (req, res) => {
+  try {
+    const result = await pool.query(
+      'SELECT * FROM invoices WHERE client_id = $1 ORDER BY created_at DESC',
+      [req.params.id]
+    );
+    res.json(result.rows);
+  } catch (err) {
+    res.status(500).json({ error: 'Erro ao buscar faturas' });
+  }
+});
+
+// Criar fatura manualmente
+router.post('/clients/:id/invoices', adminAuth, async (req, res) => {
+  const { description, quantia, due_date, period_days } = req.body;
+  if (!description || !quantia || !due_date) return res.status(400).json({ error: 'Campos obrigatórios: descrição, valor e vencimento' });
+  try {
+    const result = await pool.query(
+      `INSERT INTO invoices (client_id, description, quantia, status, due_date, period_days)
+       VALUES ($1, $2, $3, 'pending', $4, $5) RETURNING *`,
+      [req.params.id, description, quantia, due_date, period_days || 30]
+    );
+    res.status(201).json(result.rows[0]);
+  } catch (err) {
+    res.status(500).json({ error: 'Erro ao criar fatura' });
+  }
+});
+
+// Marcar fatura como paga → renova plano e gera próxima fatura
+router.put('/clients/:id/invoices/:invoiceId/pay', adminAuth, async (req, res) => {
+  try {
+    const invoice = await pool.query('SELECT * FROM invoices WHERE id = $1 AND client_id = $2', [req.params.invoiceId, req.params.id]);
+    if (invoice.rows.length === 0) return res.status(404).json({ error: 'Fatura não encontrada' });
+    const inv = invoice.rows[0];
+
+    // Marca como paga
+    await pool.query(
+      `UPDATE invoices SET status = 'paid', paid_at = NOW() WHERE id = $1`,
+      [inv.id]
+    );
+
+    // Renova o plano
+    const periodDays = inv.period_days || 30;
+    const client = await pool.query('SELECT plan_expires_at FROM clients WHERE id = $1', [req.params.id]);
+    const current = client.rows[0]?.plan_expires_at;
+    const base = current && new Date(current) > new Date() ? new Date(current) : new Date();
+    base.setDate(base.getDate() + periodDays);
+
+    await pool.query(
+      `UPDATE clients SET plan_expires_at = $1, status = 'active', blocked_at = NULL, blocked_reason = NULL WHERE id = $2`,
+      [base, req.params.id]
+    );
+
+    // Gera próxima fatura automaticamente
+    const nextDue = new Date(base);
+    await pool.query(
+      `INSERT INTO invoices (client_id, description, quantia, status, due_date, period_days)
+       VALUES ($1, $2, $3, 'pending', $4, $5)`,
+      [req.params.id, inv.description, inv.quantia, nextDue.toISOString().slice(0, 10), periodDays]
+    );
+
+    res.json({ message: 'Fatura paga, plano renovado e próxima fatura gerada', new_expiry: base });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Erro ao processar pagamento' });
+  }
+});
+
+// Excluir fatura
+router.delete('/clients/:id/invoices/:invoiceId', adminAuth, async (req, res) => {
+  try {
+    await pool.query('DELETE FROM invoices WHERE id = $1 AND client_id = $2', [req.params.invoiceId, req.params.id]);
+    res.json({ message: 'Fatura removida' });
+  } catch (err) {
+    res.status(500).json({ error: 'Erro ao remover fatura' });
+  }
+});
 module.exports = { router, adminAuth };
