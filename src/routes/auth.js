@@ -255,7 +255,7 @@ router.get('/billing-info', require('../middleware/auth'), async (req, res) => {
 });
 
 // Faturas do cliente (para o painel do cliente)
-rrouter.get('/invoices', require('../middleware/auth'), async (req, res) => {
+router.get('/invoices', require('../middleware/auth'), async (req, res) => {
   try {
     const result = await pool.query(
       `SELECT id, description, amount, status, due_date, paid_at, created_at
