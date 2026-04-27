@@ -334,31 +334,53 @@ router.delete('/admins/:id', adminAuth, async (req, res) => {
 // ─── FATURAS ─────────────────────────────────────────────────────────────────
 
 // Listar faturas de um cliente
-router.get('/clients/:id/invoices', adminAuth, async (req, res) => {
-  try {
-    const result = await pool.query(
-      'SELECT * FROM invoices WHERE client_id = $1 ORDER BY created_at DESC',
-      [req.params.id]
-    );
-    res.json(result.rows);
-  } catch (err) {
-    res.status(500).json({ error: 'Erro ao buscar faturas' });
-  }
-});
-
-// Criar fatura manualmente
 router.post('/clients/:id/invoices', adminAuth, async (req, res) => {
-  const { description, quantia, due_date, period_days } = req.body;
-  if (!description || !quantia || !due_date) return res.status(400).json({ error: 'Campos obrigatórios: descrição, valor e vencimento' });
+  const { description, amount, due_date, period_days } = req.body;
+  if (!description || !amount || !due_date)
+    return res.status(400).json({ error: 'Descrição, valor e vencimento são obrigatórios' });
   try {
     const result = await pool.query(
-      `INSERT INTO invoices (client_id, description, quantia, status, due_date, period_days)
+      `INSERT INTO invoices (client_id, description, amount, status, due_date, period_days)
        VALUES ($1, $2, $3, 'pending', $4, $5) RETURNING *`,
-      [req.params.id, description, quantia, due_date, period_days || 30]
+      [req.params.id, description, amount, due_date, period_days || 30]
     );
     res.status(201).json(result.rows[0]);
   } catch (err) {
+    console.error(err);
     res.status(500).json({ error: 'Erro ao criar fatura' });
+  }
+});
+
+router.put('/clients/:id/invoices/:invoiceId/pay', adminAuth, async (req, res) => {
+  try {
+    const inv = await pool.query('SELECT * FROM invoices WHERE id = $1 AND client_id = $2', [req.params.invoiceId, req.params.id]);
+    if (inv.rows.length === 0) return res.status(404).json({ error: 'Fatura não encontrada' });
+    const invoice = inv.rows[0];
+
+    await pool.query(`UPDATE invoices SET status = 'paid', paid_at = NOW() WHERE id = $1`, [invoice.id]);
+
+    const periodDays = invoice.period_days || 30;
+    const client = await pool.query('SELECT plan_expires_at FROM clients WHERE id = $1', [req.params.id]);
+    const current = client.rows[0]?.plan_expires_at;
+    const base = current && new Date(current) > new Date() ? new Date(current) : new Date();
+    base.setDate(base.getDate() + periodDays);
+
+    await pool.query(
+      `UPDATE clients SET plan_expires_at = $1, status = 'active', blocked_at = NULL, blocked_reason = NULL WHERE id = $2`,
+      [base, req.params.id]
+    );
+
+    const nextDue = new Date(base);
+    await pool.query(
+      `INSERT INTO invoices (client_id, description, amount, status, due_date, period_days)
+       VALUES ($1, $2, $3, 'pending', $4, $5)`,
+      [req.params.id, invoice.description, invoice.amount, nextDue.toISOString().slice(0, 10), periodDays]
+    );
+
+    res.json({ message: `Pago! Plano renovado por ${periodDays} dias.`, new_expiry: base });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Erro ao processar pagamento' });
   }
 });
 

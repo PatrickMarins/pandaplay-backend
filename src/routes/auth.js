@@ -255,10 +255,10 @@ router.get('/billing-info', require('../middleware/auth'), async (req, res) => {
 });
 
 // Faturas do cliente (para o painel do cliente)
-router.get('/invoices', require('../middleware/auth'), async (req, res) => {
+rrouter.get('/invoices', require('../middleware/auth'), async (req, res) => {
   try {
     const result = await pool.query(
-      `SELECT id, description, quantia as amount, status, due_date, paid_at, created_at
+      `SELECT id, description, amount, status, due_date, paid_at, created_at
        FROM invoices WHERE client_id = $1 ORDER BY created_at DESC`,
       [req.client.id]
     );
@@ -267,5 +267,12 @@ router.get('/invoices', require('../middleware/auth'), async (req, res) => {
     res.status(500).json({ error: 'Erro ao buscar faturas' });
   }
 });
-
+router.get('/plans', async (req, res) => {
+  try {
+    const result = await pool.query('SELECT * FROM plans WHERE active = TRUE ORDER BY max_screens ASC');
+    res.json(result.rows);
+  } catch (err) {
+    res.status(500).json({ error: 'Erro ao buscar planos' });
+  }
+});
 module.exports = router;
