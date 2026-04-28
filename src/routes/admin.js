@@ -161,35 +161,7 @@ router.get('/clients/:id', adminAuth, async (req, res) => {
       `, [req.params.id]),
     ]);
 
-    const subscription = subResult.rows[0] || null;
-
-    let invoices = [];
-    if (subscription) {
-      const invRes = await pool.query(
-        'SELECT * FROM invoices WHERE subscription_id = $1 ORDER BY due_date DESC',
-        [subscription.id]
-      );
-      invoices = invRes.rows;
-    }
-    const avulsas = await pool.query(
-      'SELECT * FROM invoices WHERE client_id = $1 AND subscription_id IS NULL ORDER BY due_date DESC',
-      [req.params.id]
-    );
-    invoices = [...invoices, ...avulsas.rows];
-
-    res.json({
-      ...result.rows[0],
-      screens: screens.rows,
-      subscription,
-      invoices,
-    });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Erro ao buscar cliente' });
-  }
-});
-
-    const subscription = subResult.rows[0] || null;
+   const subscription = subResult.rows[0] || null;
 
     // Busca faturas — via subscription ou direto do cliente
     let invoices = [];
@@ -215,7 +187,7 @@ router.get('/clients/:id', adminAuth, async (req, res) => {
     });
   } catch (err) {
     console.error(err);
-    res.status(500).json({ error: 'Erro ao buscar cliente' });
+    res.status(500).json({ error: 'Erro ao processar pagamento' });
   }
 });
 
