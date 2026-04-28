@@ -283,40 +283,24 @@ router.delete('/clients/:id', adminAuth, async (req, res) => {
 });
 
 // ─── FATURAS ─────────────────────────────────────────────────────────────────
-router.post('/clients/:id/invoices', adminAuth, async (req, res) => {
-  const { description, amount, due_date, period_days } = req.body;
-  if (!description || !amount || !due_date)
-    return res.status(400).json({ error: 'Descrição, valor e vencimento são obrigatórios' });
-  try {
-    const result = await pool.query(
-      `INSERT INTO invoices (client_id, description, amount, status, due_date, period_days)
-       VALUES ($1, $2, $3, 'pending', $4, $5) RETURNING *`,
-      [req.params.id, description, amount, due_date, period_days || 30]
-    );
-    res.status(201).json(result.rows[0]);
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Erro ao criar fatura' });
-  }
-});
-
 router.put('/clients/:id/invoices/:invoiceId/pay', adminAuth, async (req, res) => {
   try {
     const inv = await pool.query('SELECT * FROM invoices WHERE id = $1 AND client_id = $2', [req.params.invoiceId, req.params.id]);
     if (inv.rows.length === 0) return res.status(404).json({ error: 'Fatura não encontrada' });
     const invoice = inv.rows[0];
 
+    // Só marca como paga — sem criar nova fatura
     await pool.query("UPDATE invoices SET status = 'paid', paid_at = NOW() WHERE id = $1", [invoice.id]);
 
-    // Se tem subscription — usa lógica de renovação baseada no ciclo
     if (invoice.subscription_id) {
       const subRes = await pool.query('SELECT * FROM subscriptions WHERE id = $1', [invoice.subscription_id]);
       if (subRes.rows.length > 0) {
         const sub = subRes.rows[0];
         const cycleMonths = { monthly: 1, semiannual: 6, annual: 12 };
         const months = cycleMonths[sub.billing_cycle] || 1;
-        const base = sub.next_due_date && new Date(sub.next_due_date) > new Date()
-          ? new Date(sub.next_due_date) : new Date();
+
+        // Próximo vencimento = due_date da fatura + 1 ciclo
+        const base = new Date(invoice.due_date);
         base.setMonth(base.getMonth() + months);
         base.setDate(sub.billing_day);
 
@@ -329,20 +313,24 @@ router.put('/clients/:id/invoices/:invoiceId/pay', adminAuth, async (req, res) =
           [base, req.params.id]
         );
 
-        const planRes = await pool.query('SELECT * FROM plans WHERE id = $1', [sub.plan_id]);
-        const p = planRes.rows[0];
-        const discount = sub.billing_cycle === 'semiannual' ? 0.05 : sub.billing_cycle === 'annual' ? 0.15 : 0;
-        const amount = parseFloat(p?.price || invoice.amount) * months * (1 - discount);
-        const cycleLabel = { monthly: 'Mensal', semiannual: 'Semestral', annual: 'Anual' };
-
-        await pool.query(`
-          INSERT INTO invoices (client_id, subscription_id, description, amount, status, due_date, period_days)
-          VALUES ($1, $2, $3, $4, 'pending', $5, $6)
-        `, [req.params.id, sub.id, `${p?.name || 'Plano'} — ${cycleLabel[sub.billing_cycle]}`, amount.toFixed(2), base, months * 30]);
-
         return res.json({ message: `Pago! Próximo vencimento: ${base.toLocaleDateString('pt-BR')}`, next_due: base });
       }
     }
+
+    // Fatura avulsa — só atualiza client
+    const periodDays = invoice.period_days || 30;
+    const base = new Date();
+    base.setDate(base.getDate() + periodDays);
+    await pool.query(
+      "UPDATE clients SET plan_expires_at = $1, status = 'active', blocked_at = NULL WHERE id = $2",
+      [base, req.params.id]
+    );
+    res.json({ message: 'Fatura paga!', next_due: base });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Erro ao processar pagamento' });
+  }
+});
 
     // Fatura avulsa — renovação simples por period_days
     const periodDays = invoice.period_days || 30;

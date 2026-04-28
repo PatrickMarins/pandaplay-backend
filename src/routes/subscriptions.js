@@ -37,7 +37,7 @@ router.get('/my/invoices', auth, async (req, res) => {
   }
 });
 
-// ─── CLIENTE: criar/atualizar assinatura (escolher plano) ────────────────────
+// ─── CLIENTE: criar/atualizar assinatura ─────────────────────────────────────
 router.post('/subscribe', auth, async (req, res) => {
   const { plan_id, billing_cycle, billing_day } = req.body;
   if (!plan_id || !billing_cycle || !billing_day)
@@ -52,35 +52,28 @@ router.post('/subscribe', auth, async (req, res) => {
     if (plan.rows.length === 0) return res.status(404).json({ error: 'Plano não encontrado' });
     const p = plan.rows[0];
 
-    // Verifica se já tem assinatura ativa
     const existing = await pool.query(
       "SELECT id FROM subscriptions WHERE client_id = $1 AND status NOT IN ('cancelled')",
       [req.client.id]
     );
 
-    // Calcula primeira data de vencimento
     const now = new Date();
-    let nextDue = new Date(now.getFullYear(), now.getMonth(), billing_day);
-    if (nextDue <= now) nextDue.setMonth(nextDue.getMonth() + 1);
+    const nextDue = new Date(now.getFullYear(), now.getMonth() + 1, billing_day);
 
-    // Calcula valor de acordo com o ciclo
     const cycleMonths = { monthly: 1, semiannual: 6, annual: 12 };
     const months = cycleMonths[billing_cycle];
-    const amount = parseFloat(p.price) * months;
     const discount = billing_cycle === 'semiannual' ? 0.05 : billing_cycle === 'annual' ? 0.15 : 0;
-    const finalAmount = amount * (1 - discount);
+    const finalAmount = parseFloat(p.price) * months * (1 - discount);
 
     let subscriptionId;
 
     if (existing.rows.length > 0) {
-      // Upgrade/downgrade — atualiza assinatura existente
       subscriptionId = existing.rows[0].id;
       await pool.query(`
         UPDATE subscriptions SET plan_id = $1, billing_cycle = $2, billing_day = $3,
           next_due_date = $4, status = 'active' WHERE id = $5
       `, [plan_id, billing_cycle, billing_day, nextDue, subscriptionId]);
     } else {
-      // Nova assinatura
       const sub = await pool.query(`
         INSERT INTO subscriptions (client_id, plan_id, billing_cycle, billing_day, next_due_date, status)
         VALUES ($1, $2, $3, $4, $5, 'active') RETURNING id
@@ -88,10 +81,9 @@ router.post('/subscribe', auth, async (req, res) => {
       subscriptionId = sub.rows[0].id;
     }
 
-    // Atualiza plan_id no cliente
     await pool.query('UPDATE clients SET plan_id = $1 WHERE id = $2', [plan_id, req.client.id]);
 
-    // Cria primeira fatura se não existir pendente
+    // Cria primeira fatura apenas se não existir nenhuma pendente para essa subscription
     const pendingInv = await pool.query(
       "SELECT id FROM invoices WHERE subscription_id = $1 AND status = 'pending'",
       [subscriptionId]
@@ -136,7 +128,7 @@ router.get('/admin/all', require('../middleware/adminAuth'), async (req, res) =>
   }
 });
 
-// ─── ADMIN: listar faturas de uma assinatura ──────────────────────────────────
+// ─── ADMIN: listar faturas de uma assinatura ─────────────────────────────────
 router.get('/admin/:subscriptionId/invoices', require('../middleware/adminAuth'), async (req, res) => {
   try {
     const result = await pool.query(
@@ -150,13 +142,14 @@ router.get('/admin/:subscriptionId/invoices', require('../middleware/adminAuth')
 });
 
 // ─── ADMIN: marcar fatura como paga ──────────────────────────────────────────
+// NÃO gera nova fatura — apenas atualiza status e próximo vencimento da subscription
 router.put('/admin/invoices/:invoiceId/pay', require('../middleware/adminAuth'), async (req, res) => {
   try {
     const inv = await pool.query('SELECT * FROM invoices WHERE id = $1', [req.params.invoiceId]);
     if (inv.rows.length === 0) return res.status(404).json({ error: 'Fatura não encontrada' });
     const invoice = inv.rows[0];
 
-    // Marca como paga
+    // Apenas atualiza status — sem criar nova fatura
     await pool.query(
       "UPDATE invoices SET status = 'paid', paid_at = NOW() WHERE id = $1",
       [invoice.id]
@@ -166,49 +159,25 @@ router.put('/admin/invoices/:invoiceId/pay', require('../middleware/adminAuth'),
       return res.json({ message: 'Fatura marcada como paga' });
     }
 
-    // Busca assinatura
     const sub = await pool.query('SELECT * FROM subscriptions WHERE id = $1', [invoice.subscription_id]);
     if (sub.rows.length === 0) return res.json({ message: 'Fatura paga' });
     const subscription = sub.rows[0];
 
-    // Calcula próximo vencimento
+    // Próximo vencimento baseado na due_date da fatura paga + 1 ciclo
     const cycleMonths = { monthly: 1, semiannual: 6, annual: 12 };
     const months = cycleMonths[subscription.billing_cycle] || 1;
-    const current = subscription.next_due_date ? new Date(subscription.next_due_date) : new Date();
-    const nextDue = new Date(current);
+    const nextDue = new Date(invoice.due_date);
     nextDue.setMonth(nextDue.getMonth() + months);
-    // Garante o dia correto
     nextDue.setDate(subscription.billing_day);
 
-    // Atualiza assinatura
     await pool.query(
       "UPDATE subscriptions SET next_due_date = $1, status = 'active' WHERE id = $2",
       [nextDue, subscription.id]
     );
-
-    // Atualiza plan_expires_at do cliente
     await pool.query(
       "UPDATE clients SET plan_expires_at = $1, status = 'active', blocked_at = NULL WHERE id = $2",
       [nextDue, subscription.client_id]
     );
-
-    // Gera próxima fatura
-    const plan = await pool.query('SELECT * FROM plans WHERE id = $1', [subscription.plan_id]);
-    const p = plan.rows[0];
-    const discount = subscription.billing_cycle === 'semiannual' ? 0.05 : subscription.billing_cycle === 'annual' ? 0.15 : 0;
-    const amount = parseFloat(p?.price || invoice.amount) * months * (1 - discount);
-    const cycleLabel = { monthly: 'Mensal', semiannual: 'Semestral', annual: 'Anual' };
-
-    await pool.query(`
-      INSERT INTO invoices (client_id, subscription_id, description, amount, status, due_date, period_days)
-      VALUES ($1, $2, $3, $4, 'pending', $5, $6)
-    `, [
-      subscription.client_id, subscription.id,
-      `${p?.name || 'Plano'} — ${cycleLabel[subscription.billing_cycle] || 'Mensal'}`,
-      amount.toFixed(2),
-      nextDue,
-      months * 30
-    ]);
 
     res.json({ message: `Pago! Próximo vencimento: ${nextDue.toLocaleDateString('pt-BR')}`, next_due: nextDue });
   } catch (err) {
@@ -217,7 +186,7 @@ router.put('/admin/invoices/:invoiceId/pay', require('../middleware/adminAuth'),
   }
 });
 
-// ─── ADMIN: cancelar assinatura ───────────────────────────────────────────────
+// ─── ADMIN: cancelar assinatura ──────────────────────────────────────────────
 router.put('/admin/:subscriptionId/cancel', require('../middleware/adminAuth'), async (req, res) => {
   try {
     await pool.query(
