@@ -131,9 +131,13 @@ router.get('/clients/:id', adminAuth, async (req, res) => {
       SELECT c.*, p.name as plan_name, p.max_screens, p.price,
         (SELECT COUNT(*) FROM screens s WHERE s.client_id = c.id) as screen_count,
         (SELECT COUNT(*) FROM screens s WHERE s.client_id = c.id AND s.status = 'online') as screens_online,
+        (SELECT COUNT(*) FROM screens s WHERE s.client_id = c.id AND s.status = 'offline') as screens_offline,
         (SELECT COUNT(*) FROM companies co WHERE co.client_id = c.id) as company_count,
         (SELECT COUNT(*) FROM media m WHERE m.client_id = c.id) as media_count,
-        (SELECT COUNT(*) FROM playlists pl WHERE pl.client_id = c.id) as playlist_count
+        (SELECT COALESCE(SUM(m.size),0) FROM media m WHERE m.client_id = c.id) as media_size,
+        (SELECT COUNT(*) FROM playlists pl WHERE pl.client_id = c.id) as playlist_count,
+        (SELECT COUNT(*) FROM screens s WHERE s.client_id = c.id AND (s.rotation = 0 OR s.rotation = 180)) as screens_horizontal,
+        (SELECT COUNT(*) FROM screens s WHERE s.client_id = c.id AND (s.rotation = 90 OR s.rotation = 270)) as screens_vertical
       FROM clients c LEFT JOIN plans p ON p.id = c.plan_id WHERE c.id = $1
     `, [req.params.id]);
     if (result.rows.length === 0) return res.status(404).json({ error: 'Cliente não encontrado' });
@@ -141,8 +145,11 @@ router.get('/clients/:id', adminAuth, async (req, res) => {
     const [screens, subResult] = await Promise.all([
       pool.query(`
         SELECT id, name, status, last_seen, current_file, current_playlist, app_version,
+          rotation, auto_start, show_status,
           CASE WHEN status = 'online' THEN 0
-          ELSE EXTRACT(EPOCH FROM (NOW() - last_seen))/60 END as minutes_offline
+          ELSE EXTRACT(EPOCH FROM (NOW() - last_seen))/60 END as minutes_offline,
+          CASE WHEN status = 'online' AND last_seen IS NOT NULL
+          THEN EXTRACT(EPOCH FROM (NOW() - last_seen))/60 ELSE 0 END as minutes_online
         FROM screens WHERE client_id = $1 ORDER BY name
       `, [req.params.id]),
       pool.query(`
@@ -153,6 +160,34 @@ router.get('/clients/:id', adminAuth, async (req, res) => {
         ORDER BY s.created_at DESC LIMIT 1
       `, [req.params.id]),
     ]);
+
+    const subscription = subResult.rows[0] || null;
+
+    let invoices = [];
+    if (subscription) {
+      const invRes = await pool.query(
+        'SELECT * FROM invoices WHERE subscription_id = $1 ORDER BY due_date DESC',
+        [subscription.id]
+      );
+      invoices = invRes.rows;
+    }
+    const avulsas = await pool.query(
+      'SELECT * FROM invoices WHERE client_id = $1 AND subscription_id IS NULL ORDER BY due_date DESC',
+      [req.params.id]
+    );
+    invoices = [...invoices, ...avulsas.rows];
+
+    res.json({
+      ...result.rows[0],
+      screens: screens.rows,
+      subscription,
+      invoices,
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Erro ao buscar cliente' });
+  }
+});
 
     const subscription = subResult.rows[0] || null;
 
