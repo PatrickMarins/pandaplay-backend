@@ -43,6 +43,7 @@ const adminAuth = (req, res, next) => {
   } catch { res.status(401).json({ error: 'Token invalido' }); }
 };
 
+// ─── AUTH ─────────────────────────────────────────────────────────────────────
 router.post('/login', async (req, res) => {
   const { email, password } = req.body;
   try {
@@ -81,32 +82,33 @@ router.post('/verify-login', async (req, res) => {
   }
 });
 
+// ─── DASHBOARD ────────────────────────────────────────────────────────────────
 router.get('/dashboard', adminAuth, async (req, res) => {
   try {
-    const [clients, screens, companies, pending, expiring] = await Promise.all([
+    const [clients, screens, companies, pending, overdue] = await Promise.all([
       pool.query("SELECT COUNT(*) FROM clients WHERE status != 'pending'"),
       pool.query('SELECT COUNT(*) FROM screens WHERE client_id IS NOT NULL'),
       pool.query('SELECT COUNT(*) FROM companies'),
       pool.query("SELECT COUNT(*) FROM clients WHERE status = 'pending'"),
-      pool.query("SELECT COUNT(*) FROM clients WHERE plan_expires_at IS NOT NULL AND plan_expires_at BETWEEN NOW() AND NOW() + INTERVAL '7 days'"),
+      pool.query("SELECT COUNT(*) FROM invoices WHERE status = 'overdue'"),
     ]);
     res.json({
       total_clients: parseInt(clients.rows[0].count),
       total_screens: parseInt(screens.rows[0].count),
       total_companies: parseInt(companies.rows[0].count),
       pending_clients: parseInt(pending.rows[0].count),
-      expiring_clients: parseInt(expiring.rows[0].count),
+      overdue_invoices: parseInt(overdue.rows[0].count),
     });
   } catch (err) {
     res.status(500).json({ error: 'Erro ao buscar dashboard' });
   }
 });
 
+// ─── CLIENTES ─────────────────────────────────────────────────────────────────
 router.get('/clients', adminAuth, async (req, res) => {
   try {
     const result = await pool.query(`
-      SELECT 
-        c.id, c.name, c.email, c.status, c.plan_id,
+      SELECT c.id, c.name, c.email, c.status, c.plan_id,
         c.trial_ends_at, c.trial_days, c.blocked_at, c.blocked_reason,
         c.plan_expires_at, c.created_at,
         p.name as plan_name, p.max_screens, p.price,
@@ -136,14 +138,48 @@ router.get('/clients/:id', adminAuth, async (req, res) => {
     `, [req.params.id]);
     if (result.rows.length === 0) return res.status(404).json({ error: 'Cliente não encontrado' });
 
-    const screens = await pool.query(`
-      SELECT id, name, status, last_seen, current_file, current_playlist, app_version,
-        CASE WHEN status = 'online' THEN 0 ELSE EXTRACT(EPOCH FROM (NOW() - last_seen))/60 END as minutes_offline
-      FROM screens WHERE client_id = $1
-    `, [req.params.id]);
+    const [screens, subResult] = await Promise.all([
+      pool.query(`
+        SELECT id, name, status, last_seen, current_file, current_playlist, app_version,
+          CASE WHEN status = 'online' THEN 0
+          ELSE EXTRACT(EPOCH FROM (NOW() - last_seen))/60 END as minutes_offline
+        FROM screens WHERE client_id = $1 ORDER BY name
+      `, [req.params.id]),
+      pool.query(`
+        SELECT s.*, p.name as plan_name, p.price
+        FROM subscriptions s
+        LEFT JOIN plans p ON p.id = s.plan_id
+        WHERE s.client_id = $1
+        ORDER BY s.created_at DESC LIMIT 1
+      `, [req.params.id]),
+    ]);
 
-    res.json({ ...result.rows[0], screens: screens.rows });
+    const subscription = subResult.rows[0] || null;
+
+    // Busca faturas — via subscription ou direto do cliente
+    let invoices = [];
+    if (subscription) {
+      const invRes = await pool.query(
+        'SELECT * FROM invoices WHERE subscription_id = $1 ORDER BY due_date DESC',
+        [subscription.id]
+      );
+      invoices = invRes.rows;
+    }
+    // Sempre inclui faturas avulsas (sem subscription_id) do cliente
+    const avulsas = await pool.query(
+      'SELECT * FROM invoices WHERE client_id = $1 AND subscription_id IS NULL ORDER BY due_date DESC',
+      [req.params.id]
+    );
+    invoices = [...invoices, ...avulsas.rows];
+
+    res.json({
+      ...result.rows[0],
+      screens: screens.rows,
+      subscription,
+      invoices,
+    });
   } catch (err) {
+    console.error(err);
     res.status(500).json({ error: 'Erro ao buscar cliente' });
   }
 });
@@ -160,7 +196,7 @@ router.put('/clients/:id/approve', adminAuth, async (req, res) => {
       `UPDATE clients SET status = 'active', trial_ends_at = $1, trial_days = $2, plan_id = COALESCE($3, plan_id) WHERE id = $4`,
       [trial_ends_at, trial_days || 0, plan_id || null, req.params.id]
     );
-    res.json({ message: 'Cliente aprovado com sucesso' });
+    res.json({ message: 'Cliente aprovado' });
   } catch (err) {
     res.status(500).json({ error: 'Erro ao aprovar cliente' });
   }
@@ -178,13 +214,12 @@ router.put('/clients/:id/trial', adminAuth, async (req, res) => {
       `UPDATE clients SET trial_ends_at = $1, trial_days = $2, status = 'active' WHERE id = $3`,
       [trial_ends_at, trial_days || 0, req.params.id]
     );
-    res.json({ message: 'Trial redefinido com sucesso' });
+    res.json({ message: 'Trial redefinido' });
   } catch (err) {
     res.status(500).json({ error: 'Erro ao redefinir trial' });
   }
 });
 
-// Renovar plano — escolhe quantos dias (30, 90, 120, 365)
 router.put('/clients/:id/renew', adminAuth, async (req, res) => {
   const { days } = req.body;
   if (!days || parseInt(days) < 1) return res.status(400).json({ error: 'Dias obrigatório' });
@@ -220,8 +255,8 @@ router.put('/clients/:id/block', adminAuth, async (req, res) => {
 router.put('/clients/:id/plan', adminAuth, async (req, res) => {
   const { plan_id } = req.body;
   try {
-    await pool.query('UPDATE clients SET plan_id = $1 WHERE id = $2', [plan_id, req.params.id]);
-    res.json({ message: 'Plano atribuido' });
+    await pool.query('UPDATE clients SET plan_id = $1 WHERE id = $2', [plan_id || null, req.params.id]);
+    res.json({ message: 'Plano atribuído' });
   } catch (err) {
     res.status(500).json({ error: 'Erro ao atribuir plano' });
   }
@@ -238,13 +273,109 @@ router.delete('/clients/:id', adminAuth, async (req, res) => {
     await pool.query('DELETE FROM playlists WHERE client_id = $1', [req.params.id]);
     await pool.query('DELETE FROM companies WHERE client_id = $1', [req.params.id]);
     await pool.query('DELETE FROM invoices WHERE client_id = $1', [req.params.id]);
+    await pool.query('DELETE FROM subscriptions WHERE client_id = $1', [req.params.id]);
     await pool.query('DELETE FROM clients WHERE id = $1', [req.params.id]);
-    res.json({ message: 'Cliente excluído com sucesso' });
+    res.json({ message: 'Cliente excluído' });
   } catch (err) {
+    console.error(err);
     res.status(500).json({ error: 'Erro ao excluir cliente' });
   }
 });
 
+// ─── FATURAS ─────────────────────────────────────────────────────────────────
+router.post('/clients/:id/invoices', adminAuth, async (req, res) => {
+  const { description, amount, due_date, period_days } = req.body;
+  if (!description || !amount || !due_date)
+    return res.status(400).json({ error: 'Descrição, valor e vencimento são obrigatórios' });
+  try {
+    const result = await pool.query(
+      `INSERT INTO invoices (client_id, description, amount, status, due_date, period_days)
+       VALUES ($1, $2, $3, 'pending', $4, $5) RETURNING *`,
+      [req.params.id, description, amount, due_date, period_days || 30]
+    );
+    res.status(201).json(result.rows[0]);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Erro ao criar fatura' });
+  }
+});
+
+router.put('/clients/:id/invoices/:invoiceId/pay', adminAuth, async (req, res) => {
+  try {
+    const inv = await pool.query('SELECT * FROM invoices WHERE id = $1 AND client_id = $2', [req.params.invoiceId, req.params.id]);
+    if (inv.rows.length === 0) return res.status(404).json({ error: 'Fatura não encontrada' });
+    const invoice = inv.rows[0];
+
+    await pool.query("UPDATE invoices SET status = 'paid', paid_at = NOW() WHERE id = $1", [invoice.id]);
+
+    // Se tem subscription — usa lógica de renovação baseada no ciclo
+    if (invoice.subscription_id) {
+      const subRes = await pool.query('SELECT * FROM subscriptions WHERE id = $1', [invoice.subscription_id]);
+      if (subRes.rows.length > 0) {
+        const sub = subRes.rows[0];
+        const cycleMonths = { monthly: 1, semiannual: 6, annual: 12 };
+        const months = cycleMonths[sub.billing_cycle] || 1;
+        const base = sub.next_due_date && new Date(sub.next_due_date) > new Date()
+          ? new Date(sub.next_due_date) : new Date();
+        base.setMonth(base.getMonth() + months);
+        base.setDate(sub.billing_day);
+
+        await pool.query(
+          "UPDATE subscriptions SET next_due_date = $1, status = 'active' WHERE id = $2",
+          [base, sub.id]
+        );
+        await pool.query(
+          "UPDATE clients SET plan_expires_at = $1, status = 'active', blocked_at = NULL, blocked_reason = NULL WHERE id = $2",
+          [base, req.params.id]
+        );
+
+        const planRes = await pool.query('SELECT * FROM plans WHERE id = $1', [sub.plan_id]);
+        const p = planRes.rows[0];
+        const discount = sub.billing_cycle === 'semiannual' ? 0.05 : sub.billing_cycle === 'annual' ? 0.15 : 0;
+        const amount = parseFloat(p?.price || invoice.amount) * months * (1 - discount);
+        const cycleLabel = { monthly: 'Mensal', semiannual: 'Semestral', annual: 'Anual' };
+
+        await pool.query(`
+          INSERT INTO invoices (client_id, subscription_id, description, amount, status, due_date, period_days)
+          VALUES ($1, $2, $3, $4, 'pending', $5, $6)
+        `, [req.params.id, sub.id, `${p?.name || 'Plano'} — ${cycleLabel[sub.billing_cycle]}`, amount.toFixed(2), base, months * 30]);
+
+        return res.json({ message: `Pago! Próximo vencimento: ${base.toLocaleDateString('pt-BR')}`, next_due: base });
+      }
+    }
+
+    // Fatura avulsa — renovação simples por period_days
+    const periodDays = invoice.period_days || 30;
+    const clientRes = await pool.query('SELECT plan_expires_at FROM clients WHERE id = $1', [req.params.id]);
+    const current = clientRes.rows[0]?.plan_expires_at;
+    const base = current && new Date(current) > new Date() ? new Date(current) : new Date();
+    base.setDate(base.getDate() + periodDays);
+    await pool.query(
+      "UPDATE clients SET plan_expires_at = $1, status = 'active', blocked_at = NULL, blocked_reason = NULL WHERE id = $2",
+      [base, req.params.id]
+    );
+    await pool.query(
+      `INSERT INTO invoices (client_id, description, amount, status, due_date, period_days)
+       VALUES ($1, $2, $3, 'pending', $4, $5)`,
+      [req.params.id, invoice.description, invoice.amount, base.toISOString().slice(0, 10), periodDays]
+    );
+    res.json({ message: `Pago! Plano renovado por ${periodDays} dias.`, next_due: base });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Erro ao processar pagamento' });
+  }
+});
+
+router.delete('/clients/:id/invoices/:invoiceId', adminAuth, async (req, res) => {
+  try {
+    await pool.query('DELETE FROM invoices WHERE id = $1 AND client_id = $2', [req.params.invoiceId, req.params.id]);
+    res.json({ message: 'Fatura removida' });
+  } catch (err) {
+    res.status(500).json({ error: 'Erro ao remover fatura' });
+  }
+});
+
+// ─── PLANOS ───────────────────────────────────────────────────────────────────
 router.get('/plans', adminAuth, async (req, res) => {
   try {
     const result = await pool.query('SELECT * FROM plans ORDER BY max_screens ASC');
@@ -280,6 +411,7 @@ router.put('/plans/:id', adminAuth, async (req, res) => {
   }
 });
 
+// ─── ADMINS ───────────────────────────────────────────────────────────────────
 router.get('/admins', adminAuth, async (req, res) => {
   try {
     const result = await pool.query('SELECT id, name, email, active, created_at FROM admins ORDER BY created_at ASC');
@@ -311,9 +443,15 @@ router.put('/admins/:id', adminAuth, async (req, res) => {
   try {
     if (password) {
       const hash = await bcrypt.hash(password, 10);
-      await pool.query('UPDATE admins SET name = COALESCE($1, name), email = COALESCE($2, email), password_hash = $3, active = COALESCE($4, active) WHERE id = $5', [name, email, hash, active, req.params.id]);
+      await pool.query(
+        'UPDATE admins SET name = COALESCE($1, name), email = COALESCE($2, email), password_hash = $3, active = COALESCE($4, active) WHERE id = $5',
+        [name, email, hash, active, req.params.id]
+      );
     } else {
-      await pool.query('UPDATE admins SET name = COALESCE($1, name), email = COALESCE($2, email), active = COALESCE($3, active) WHERE id = $4', [name, email, active, req.params.id]);
+      await pool.query(
+        'UPDATE admins SET name = COALESCE($1, name), email = COALESCE($2, email), active = COALESCE($3, active) WHERE id = $4',
+        [name, email, active, req.params.id]
+      );
     }
     res.json({ message: 'Admin atualizado' });
   } catch (err) {
@@ -331,106 +469,5 @@ router.delete('/admins/:id', adminAuth, async (req, res) => {
     res.status(500).json({ error: 'Erro ao remover admin' });
   }
 });
-// ─── FATURAS ─────────────────────────────────────────────────────────────────
 
-// Listar faturas de um cliente
-router.post('/clients/:id/invoices', adminAuth, async (req, res) => {
-  const { description, amount, due_date, period_days } = req.body;
-  if (!description || !amount || !due_date)
-    return res.status(400).json({ error: 'Descrição, valor e vencimento são obrigatórios' });
-  try {
-    const result = await pool.query(
-      `INSERT INTO invoices (client_id, description, amount, status, due_date, period_days)
-       VALUES ($1, $2, $3, 'pending', $4, $5) RETURNING *`,
-      [req.params.id, description, amount, due_date, period_days || 30]
-    );
-    res.status(201).json(result.rows[0]);
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Erro ao criar fatura' });
-  }
-});
-
-router.put('/clients/:id/invoices/:invoiceId/pay', adminAuth, async (req, res) => {
-  try {
-    const inv = await pool.query('SELECT * FROM invoices WHERE id = $1 AND client_id = $2', [req.params.invoiceId, req.params.id]);
-    if (inv.rows.length === 0) return res.status(404).json({ error: 'Fatura não encontrada' });
-    const invoice = inv.rows[0];
-
-    await pool.query(`UPDATE invoices SET status = 'paid', paid_at = NOW() WHERE id = $1`, [invoice.id]);
-
-    const periodDays = invoice.period_days || 30;
-    const client = await pool.query('SELECT plan_expires_at FROM clients WHERE id = $1', [req.params.id]);
-    const current = client.rows[0]?.plan_expires_at;
-    const base = current && new Date(current) > new Date() ? new Date(current) : new Date();
-    base.setDate(base.getDate() + periodDays);
-
-    await pool.query(
-      `UPDATE clients SET plan_expires_at = $1, status = 'active', blocked_at = NULL, blocked_reason = NULL WHERE id = $2`,
-      [base, req.params.id]
-    );
-
-    const nextDue = new Date(base);
-    await pool.query(
-      `INSERT INTO invoices (client_id, description, amount, status, due_date, period_days)
-       VALUES ($1, $2, $3, 'pending', $4, $5)`,
-      [req.params.id, invoice.description, invoice.amount, nextDue.toISOString().slice(0, 10), periodDays]
-    );
-
-    res.json({ message: `Pago! Plano renovado por ${periodDays} dias.`, new_expiry: base });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Erro ao processar pagamento' });
-  }
-});
-
-// Marcar fatura como paga → renova plano e gera próxima fatura
-router.put('/clients/:id/invoices/:invoiceId/pay', adminAuth, async (req, res) => {
-  try {
-    const invoice = await pool.query('SELECT * FROM invoices WHERE id = $1 AND client_id = $2', [req.params.invoiceId, req.params.id]);
-    if (invoice.rows.length === 0) return res.status(404).json({ error: 'Fatura não encontrada' });
-    const inv = invoice.rows[0];
-
-    // Marca como paga
-    await pool.query(
-      `UPDATE invoices SET status = 'paid', paid_at = NOW() WHERE id = $1`,
-      [inv.id]
-    );
-
-    // Renova o plano
-    const periodDays = inv.period_days || 30;
-    const client = await pool.query('SELECT plan_expires_at FROM clients WHERE id = $1', [req.params.id]);
-    const current = client.rows[0]?.plan_expires_at;
-    const base = current && new Date(current) > new Date() ? new Date(current) : new Date();
-    base.setDate(base.getDate() + periodDays);
-
-    await pool.query(
-      `UPDATE clients SET plan_expires_at = $1, status = 'active', blocked_at = NULL, blocked_reason = NULL WHERE id = $2`,
-      [base, req.params.id]
-    );
-
-    // Gera próxima fatura automaticamente
-    const nextDue = new Date(base);
-    await pool.query(
-      `INSERT INTO invoices (client_id, description, quantia, status, due_date, period_days)
-       VALUES ($1, $2, $3, 'pending', $4, $5)`,
-      [req.params.id, inv.description, inv.quantia, nextDue.toISOString().slice(0, 10), periodDays]
-    );
-
-    res.json({ message: 'Fatura paga, plano renovado e próxima fatura gerada', new_expiry: base });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Erro ao processar pagamento' });
-  }
-});
-
-// Excluir fatura
-router.delete('/clients/:id/invoices/:invoiceId', adminAuth, async (req, res) => {
-  try {
-    await pool.query('DELETE FROM invoices WHERE id = $1 AND client_id = $2', [req.params.invoiceId, req.params.id]);
-    res.json({ message: 'Fatura removida' });
-  } catch (err) {
-    res.status(500).json({ error: 'Erro ao remover fatura' });
-  }
-});
 module.exports = { router, adminAuth };
