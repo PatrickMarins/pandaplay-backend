@@ -332,28 +332,6 @@ router.put('/clients/:id/invoices/:invoiceId/pay', adminAuth, async (req, res) =
   }
 });
 
-    // Fatura avulsa — renovação simples por period_days
-    const periodDays = invoice.period_days || 30;
-    const clientRes = await pool.query('SELECT plan_expires_at FROM clients WHERE id = $1', [req.params.id]);
-    const current = clientRes.rows[0]?.plan_expires_at;
-    const base = current && new Date(current) > new Date() ? new Date(current) : new Date();
-    base.setDate(base.getDate() + periodDays);
-    await pool.query(
-      "UPDATE clients SET plan_expires_at = $1, status = 'active', blocked_at = NULL, blocked_reason = NULL WHERE id = $2",
-      [base, req.params.id]
-    );
-    await pool.query(
-      `INSERT INTO invoices (client_id, description, amount, status, due_date, period_days)
-       VALUES ($1, $2, $3, 'pending', $4, $5)`,
-      [req.params.id, invoice.description, invoice.amount, base.toISOString().slice(0, 10), periodDays]
-    );
-    res.json({ message: `Pago! Plano renovado por ${periodDays} dias.`, next_due: base });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Erro ao processar pagamento' });
-  }
-});
-
 router.delete('/clients/:id/invoices/:invoiceId', adminAuth, async (req, res) => {
   try {
     await pool.query('DELETE FROM invoices WHERE id = $1 AND client_id = $2', [req.params.invoiceId, req.params.id]);
