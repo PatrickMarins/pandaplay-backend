@@ -52,33 +52,20 @@ router.post('/login', async (req, res) => {
     const admin = result.rows[0];
     const valid = await bcrypt.compare(password, admin.password_hash);
     if (!valid) return res.status(401).json({ error: 'Credenciais inválidas' });
-    const code = Math.floor(100000 + Math.random() * 900000).toString();
-    const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
-    await pool.query('DELETE FROM email_verifications WHERE email = $1 AND type = $2', [email, 'admin_login']);
-    await pool.query('INSERT INTO email_verifications (email, code, type, expires_at) VALUES ($1, $2, $3, $4)', [email, code, 'admin_login', expiresAt]);
-    await sendAdminCode(email, code);
-    res.json({ requires_code: true, message: 'Código enviado para seu email' });
+    const token = jwt.sign({ id: admin.id, role: 'admin' }, process.env.JWT_SECRET, { expiresIn: '7d' });
+    res.json({ token, admin: { id: admin.id, name: admin.name, email: admin.email } });
   } catch (err) {
-    console.error(err?.response?.data || err.message);
     res.status(500).json({ error: 'Erro ao fazer login' });
   }
 });
 
-router.post('/verify-login', async (req, res) => {
-  const { email, code } = req.body;
+router.get('/me', adminAuth, async (req, res) => {
   try {
-    const verification = await pool.query(
-      'SELECT * FROM email_verifications WHERE email = $1 AND code = $2 AND type = $3 AND used = FALSE AND expires_at > NOW()',
-      [email, code, 'admin_login']
-    );
-    if (verification.rows.length === 0) return res.status(400).json({ error: 'Código inválido ou expirado' });
-    const admin = await pool.query('SELECT * FROM admins WHERE email = $1 AND active = TRUE', [email]);
-    if (admin.rows.length === 0) return res.status(401).json({ error: 'Admin não encontrado' });
-    await pool.query('UPDATE email_verifications SET used = TRUE WHERE id = $1', [verification.rows[0].id]);
-    const token = jwt.sign({ id: admin.rows[0].id, role: 'admin' }, process.env.JWT_SECRET, { expiresIn: '8h' });
-    res.json({ token, admin: { id: admin.rows[0].id, name: admin.rows[0].name, email: admin.rows[0].email } });
+    const result = await pool.query('SELECT id, name, email FROM admins WHERE id = $1', [req.admin.id]);
+    if (result.rows.length === 0) return res.status(404).json({ error: 'Admin não encontrado' });
+    res.json(result.rows[0]);
   } catch (err) {
-    res.status(500).json({ error: 'Erro ao verificar código' });
+    res.status(500).json({ error: 'Erro' });
   }
 });
 
