@@ -3,6 +3,10 @@ const router = express.Router();
 const pool = require('../models/db');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
+const multer = require('multer');
+const supabase = require('../models/supabase');
+
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 500 * 1024 * 1024 } });
 
 const adminAuth = (req, res, next) => {
   const token = req.headers.authorization?.split(' ')[1];
@@ -403,6 +407,20 @@ router.delete('/admins/:id', adminAuth, async (req, res) => {
 });
 
 // ─── DOWNLOADS ────────────────────────────────────────────────────────────────
+router.post('/downloads/upload', adminAuth, upload.single('file'), async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'Nenhum arquivo enviado' });
+  try {
+    const filename = `${Date.now()}-${req.file.originalname.replace(/\s/g, '_')}`;
+    const { error } = await supabase.storage.from('downloads').upload(filename, req.file.buffer, { contentType: 'application/vnd.android.package-archive', upsert: false });
+    if (error) throw error;
+    const { data } = supabase.storage.from('downloads').getPublicUrl(filename);
+    res.json({ url: data.publicUrl, filename });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Erro ao fazer upload do APK' });
+  }
+});
+
 router.get('/downloads', adminAuth, async (req, res) => {
   try {
     const result = await pool.query('SELECT * FROM downloads ORDER BY created_at DESC');
