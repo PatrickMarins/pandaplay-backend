@@ -1,6 +1,7 @@
 const express = require('express');
 const cors = require('cors');
 const dotenv = require('dotenv');
+const pool = require('./models/db');
 
 dotenv.config();
 
@@ -49,7 +50,6 @@ app.get('/api/plans', async (req, res) => {
 });
 
 const PORT = process.env.PORT || 3000;
-const pool = require('./models/db');
 
 // ─── JOB: marca telas offline após 2 min ─────────────────────────────────────
 setInterval(async () => {
