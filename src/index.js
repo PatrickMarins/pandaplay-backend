@@ -21,6 +21,13 @@ app.use('/api/admin', adminRouter);
 
 app.get('/health', (req, res) => res.json({ status: 'ok' }));
 
+app.get('/api/plans', async (req, res) => {
+  try {
+    const result = await pool.query('SELECT id, name, description, max_screens, max_companies, price FROM plans WHERE active = TRUE ORDER BY price ASC');
+    res.json(result.rows);
+  } catch (e) { res.status(500).json({ error: 'Erro' }); }
+});
+
 const PORT = process.env.PORT || 3000;
 const pool = require('./models/db');
 
