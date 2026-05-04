@@ -410,10 +410,13 @@ router.delete('/admins/:id', adminAuth, async (req, res) => {
 router.post('/downloads/upload', adminAuth, upload.single('file'), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'Nenhum arquivo enviado' });
   try {
-    const filename = `${Date.now()}-${req.file.originalname.replace(/\s/g, '_')}`;
-    const { error } = await supabase.storage.from('downloads').upload(filename, req.file.buffer, { contentType: 'application/vnd.android.package-archive', upsert: false });
-    if (error) throw error;
-    const { data } = supabase.storage.from('downloads').getPublicUrl(filename);
+    const filename = `apks/${Date.now()}-${req.file.originalname.replace(/\s/g, '_')}`;
+    const { error } = await supabase.storage.from('midias').upload(filename, req.file.buffer, { contentType: 'application/vnd.android.package-archive', upsert: false });
+    if (error) {
+      console.error('Supabase upload error:', error);
+      return res.status(500).json({ error: error.message || 'Erro ao fazer upload do APK' });
+    }
+    const { data } = supabase.storage.from('midias').getPublicUrl(filename);
     res.json({ url: data.publicUrl, filename });
   } catch (e) {
     console.error(e);
