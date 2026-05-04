@@ -3,34 +3,6 @@ const router = express.Router();
 const pool = require('../models/db');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
-const axios = require('axios');
-
-async function sendAdminCode(email, code) {
-  await axios.post('https://api.brevo.com/v3/smtp/email', {
-    sender: { name: 'PandaPlay Admin', email: 'arnaldo.patrick@gmail.com' },
-    to: [{ email }],
-    subject: 'Código de acesso — Painel Admin PandaPlay',
-    htmlContent: `
-      <div style="font-family: Inter, sans-serif; max-width: 480px; margin: 0 auto; padding: 40px 24px; background: #0f1218;">
-        <div style="background: #181e28; border-radius: 16px; padding: 40px; border: 1px solid rgba(255,255,255,0.08);">
-          <div style="text-align: center; margin-bottom: 32px;">
-            <div style="display: inline-block; background: linear-gradient(135deg, #1a0533, #7c5cfc); border-radius: 12px; padding: 12px 20px;">
-              <span style="color: white; font-size: 20px; font-weight: 800;">PandaPlay Admin</span>
-            </div>
-          </div>
-          <h2 style="color: #f0f0f8; font-size: 20px; font-weight: 700; margin-bottom: 8px;">Código de Acesso Administrativo</h2>
-          <p style="color: #8888aa; font-size: 14px; line-height: 1.7; margin-bottom: 28px;">Use o código abaixo para acessar o painel administrativo.</p>
-          <div style="background: #0f1218; border: 2px dashed #d97706; border-radius: 12px; padding: 24px; text-align: center; margin-bottom: 28px;">
-            <div style="font-size: 42px; font-weight: 800; letter-spacing: 10px; color: #d97706; font-family: monospace;">${code}</div>
-          </div>
-          <p style="color: #555570; font-size: 13px; text-align: center;">Este código expira em <strong style="color: #8888aa;">10 minutos</strong>.</p>
-        </div>
-      </div>
-    `
-  }, {
-    headers: { 'api-key': process.env.BREVO_API_KEY || '', 'Content-Type': 'application/json' }
-  });
-}
 
 const adminAuth = (req, res, next) => {
   const token = req.headers.authorization?.split(' ')[1];
