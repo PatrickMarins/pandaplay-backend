@@ -402,4 +402,43 @@ router.delete('/admins/:id', adminAuth, async (req, res) => {
   }
 });
 
+// ─── DOWNLOADS ────────────────────────────────────────────────────────────────
+router.get('/downloads', adminAuth, async (req, res) => {
+  try {
+    const result = await pool.query('SELECT * FROM downloads ORDER BY created_at DESC');
+    res.json(result.rows);
+  } catch (e) { res.status(500).json({ error: 'Erro' }); }
+});
+
+router.post('/downloads', adminAuth, async (req, res) => {
+  const { version, name, url, notes, size, is_latest } = req.body;
+  try {
+    if (is_latest) await pool.query('UPDATE downloads SET is_latest = FALSE');
+    const result = await pool.query(
+      'INSERT INTO downloads (version, name, url, notes, size, is_latest) VALUES ($1,$2,$3,$4,$5,$6) RETURNING *',
+      [version, name || 'PandaPlay TV', url, notes || '', size || '', is_latest || false]
+    );
+    res.status(201).json(result.rows[0]);
+  } catch (e) { res.status(500).json({ error: 'Erro ao criar versão' }); }
+});
+
+router.put('/downloads/:id', adminAuth, async (req, res) => {
+  const { version, name, url, notes, size, is_latest } = req.body;
+  try {
+    if (is_latest) await pool.query('UPDATE downloads SET is_latest = FALSE WHERE id != $1', [req.params.id]);
+    const result = await pool.query(
+      'UPDATE downloads SET version=$1, name=$2, url=$3, notes=$4, size=$5, is_latest=$6 WHERE id=$7 RETURNING *',
+      [version, name || 'PandaPlay TV', url, notes || '', size || '', is_latest || false, req.params.id]
+    );
+    res.json(result.rows[0]);
+  } catch (e) { res.status(500).json({ error: 'Erro ao atualizar' }); }
+});
+
+router.delete('/downloads/:id', adminAuth, async (req, res) => {
+  try {
+    await pool.query('DELETE FROM downloads WHERE id = $1', [req.params.id]);
+    res.json({ message: 'Removido' });
+  } catch (e) { res.status(500).json({ error: 'Erro ao remover' }); }
+});
+
 module.exports = { router, adminAuth };

@@ -21,6 +21,26 @@ app.use('/api/admin', adminRouter);
 
 app.get('/health', (req, res) => res.json({ status: 'ok' }));
 
+pool.query(`
+  CREATE TABLE IF NOT EXISTS downloads (
+    id SERIAL PRIMARY KEY,
+    version VARCHAR(50) NOT NULL,
+    name VARCHAR(100) DEFAULT 'PandaPlay TV',
+    url TEXT NOT NULL,
+    notes TEXT,
+    size VARCHAR(20),
+    is_latest BOOLEAN DEFAULT FALSE,
+    created_at TIMESTAMP DEFAULT NOW()
+  )
+`).catch(e => console.log('Erro ao criar tabela downloads:', e.message));
+
+app.get('/api/downloads', async (req, res) => {
+  try {
+    const result = await pool.query('SELECT * FROM downloads ORDER BY created_at DESC');
+    res.json(result.rows);
+  } catch (e) { res.status(500).json({ error: 'Erro' }); }
+});
+
 app.get('/api/plans', async (req, res) => {
   try {
     const result = await pool.query('SELECT id, name, description, max_screens, max_companies, price FROM plans WHERE active = TRUE ORDER BY price ASC');
