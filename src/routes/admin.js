@@ -6,7 +6,24 @@ const jwt = require('jsonwebtoken');
 const multer = require('multer');
 const supabase = require('../models/supabase');
 
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 500 * 1024 * 1024 } });
+const apkUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 500 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    if (!file.originalname.toLowerCase().endsWith('.apk')) {
+      return cb(new Error('Envie um arquivo .apk'));
+    }
+    cb(null, true);
+  }
+});
+
+const buildApkStoragePath = (originalName) => {
+  const safeName = originalName
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-zA-Z0-9._-]/g, '_');
+  return `apks/${Date.now()}-${safeName}`;
+};
 
 const adminAuth = (req, res, next) => {
   const token = req.headers.authorization?.split(' ')[1];
@@ -407,11 +424,23 @@ router.delete('/admins/:id', adminAuth, async (req, res) => {
 });
 
 // ─── DOWNLOADS ────────────────────────────────────────────────────────────────
-router.post('/downloads/upload', adminAuth, upload.single('file'), async (req, res) => {
+router.post('/downloads/upload', adminAuth, (req, res, next) => {
+  apkUpload.single('file')(req, res, (err) => {
+    if (!err) return next();
+    if (err instanceof multer.MulterError && err.code === 'LIMIT_FILE_SIZE') {
+      return res.status(413).json({ error: 'APK muito grande. O limite atual é 500MB.' });
+    }
+    return res.status(400).json({ error: err.message || 'Arquivo APK inválido' });
+  });
+}, async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'Nenhum arquivo enviado' });
   try {
-    const filename = `apks/${Date.now()}-${req.file.originalname.replace(/\s/g, '_')}`;
-    const { error } = await supabase.storage.from('midias').upload(filename, req.file.buffer, { contentType: 'application/vnd.android.package-archive', upsert: false });
+    const filename = buildApkStoragePath(req.file.originalname);
+    const { error } = await supabase.storage.from('midias').upload(filename, req.file.buffer, {
+      contentType: 'application/vnd.android.package-archive',
+      cacheControl: '3600',
+      upsert: false
+    });
     if (error) {
       console.error('Supabase upload error:', error);
       return res.status(500).json({ error: error.message || 'Erro ao fazer upload do APK' });
@@ -420,7 +449,32 @@ router.post('/downloads/upload', adminAuth, upload.single('file'), async (req, r
     res.json({ url: data.publicUrl, filename });
   } catch (e) {
     console.error(e);
-    res.status(500).json({ error: 'Erro ao fazer upload do APK' });
+    res.status(500).json({ error: e.message || 'Erro ao fazer upload do APK' });
+  }
+});
+
+router.post('/downloads/upload-url', adminAuth, async (req, res) => {
+  const { filename } = req.body;
+  if (!filename || !filename.toLowerCase().endsWith('.apk')) {
+    return res.status(400).json({ error: 'Envie um arquivo .apk' });
+  }
+  try {
+    const path = buildApkStoragePath(filename);
+    const { data, error } = await supabase.storage.from('midias').createSignedUploadUrl(path);
+    if (error) {
+      console.error('Supabase signed upload error:', error);
+      return res.status(500).json({ error: error.message || 'Erro ao preparar upload do APK' });
+    }
+    const { data: publicData } = supabase.storage.from('midias').getPublicUrl(path);
+    res.json({
+      path,
+      token: data.token,
+      signedUrl: data.signedUrl,
+      url: publicData.publicUrl
+    });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: e.message || 'Erro ao preparar upload do APK' });
   }
 });
 
