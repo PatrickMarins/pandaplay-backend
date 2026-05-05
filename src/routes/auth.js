@@ -4,6 +4,24 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const pool = require('../models/db');
 const axios = require('axios');
+const multer = require('multer');
+const path = require('path');
+const { v4: uuidv4 } = require('uuid');
+const { getFirebaseBucket, buildFirebaseDownloadUrl } = require('../models/firebaseStorage');
+
+const photoUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    if (!file.mimetype.startsWith('image/')) return cb(new Error('Envie uma imagem valida'));
+    cb(null, true);
+  }
+});
+
+const sanitizeFileName = (name) => name
+  .normalize('NFD')
+  .replace(/[\u0300-\u036f]/g, '')
+  .replace(/[^a-zA-Z0-9._-]/g, '_');
 
 function generateCode() {
   return Math.floor(100000 + Math.random() * 900000).toString();
@@ -235,8 +253,40 @@ router.put('/profile', require('../middleware/auth'), async (req, res) => {
   }
 });
 
-router.post('/photo', require('../middleware/auth'), async (req, res) => {
-  res.json({ photo_url: null, message: 'Em breve' });
+router.post('/photo', require('../middleware/auth'), (req, res, next) => {
+  photoUpload.single('photo')(req, res, (err) => {
+    if (!err) return next();
+    if (err instanceof multer.MulterError && err.code === 'LIMIT_FILE_SIZE') {
+      return res.status(413).json({ error: 'Imagem muito grande. O limite atual e 10MB.' });
+    }
+    return res.status(400).json({ error: err.message || 'Imagem invalida' });
+  });
+}, async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'Nenhuma imagem enviada' });
+  try {
+    const ext = path.extname(req.file.originalname);
+    const safeName = sanitizeFileName(path.basename(req.file.originalname, ext));
+    const storagePath = `clients/${req.client.id}/profile/${Date.now()}-${safeName}${ext}`;
+    const token = uuidv4();
+    const bucket = getFirebaseBucket();
+
+    await bucket.file(storagePath).save(req.file.buffer, {
+      resumable: false,
+      metadata: {
+        contentType: req.file.mimetype,
+        metadata: {
+          firebaseStorageDownloadTokens: token
+        }
+      }
+    });
+
+    const photoUrl = buildFirebaseDownloadUrl(bucket.name, storagePath, token);
+    await pool.query('UPDATE clients SET photo_url = $1 WHERE id = $2', [photoUrl, req.client.id]);
+    res.json({ photo_url: photoUrl, message: 'Foto atualizada' });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message || 'Erro ao enviar foto' });
+  }
 });
 
 router.get('/billing-info', require('../middleware/auth'), async (req, res) => {

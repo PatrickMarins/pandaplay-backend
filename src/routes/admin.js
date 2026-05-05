@@ -4,7 +4,8 @@ const pool = require('../models/db');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const multer = require('multer');
-const supabase = require('../models/supabase');
+const { v4: uuidv4 } = require('uuid');
+const { getFirebaseBucket, buildFirebaseDownloadUrl } = require('../models/firebaseStorage');
 
 const apkUpload = multer({
   storage: multer.memoryStorage(),
@@ -23,6 +24,35 @@ const buildApkStoragePath = (originalName) => {
     .replace(/[\u0300-\u036f]/g, '')
     .replace(/[^a-zA-Z0-9._-]/g, '_');
   return `apks/${Date.now()}-${safeName}`;
+};
+
+const apkContentType = 'application/vnd.android.package-archive';
+
+const buildFirebaseApkUpload = async (originalName) => {
+  const path = buildApkStoragePath(originalName);
+  const token = uuidv4();
+  const bucket = getFirebaseBucket();
+  const file = bucket.file(path);
+  const uploadHeaders = {
+    'Content-Type': apkContentType,
+    'x-goog-meta-firebaseStorageDownloadTokens': token
+  };
+  const [signedUrl] = await file.getSignedUrl({
+    version: 'v4',
+    action: 'write',
+    expires: Date.now() + 15 * 60 * 1000,
+    contentType: apkContentType,
+    extensionHeaders: {
+      'x-goog-meta-firebaseStorageDownloadTokens': token
+    }
+  });
+
+  return {
+    path,
+    signedUrl,
+    uploadHeaders,
+    url: buildFirebaseDownloadUrl(bucket.name, path, token)
+  };
 };
 
 const adminAuth = (req, res, next) => {
@@ -435,18 +465,19 @@ router.post('/downloads/upload', adminAuth, (req, res, next) => {
 }, async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'Nenhum arquivo enviado' });
   try {
-    const filename = buildApkStoragePath(req.file.originalname);
-    const { error } = await supabase.storage.from('midias').upload(filename, req.file.buffer, {
-      contentType: 'application/vnd.android.package-archive',
-      cacheControl: '3600',
-      upsert: false
+    const path = buildApkStoragePath(req.file.originalname);
+    const token = uuidv4();
+    const bucket = getFirebaseBucket();
+    await bucket.file(path).save(req.file.buffer, {
+      resumable: false,
+      metadata: {
+        contentType: apkContentType,
+        metadata: {
+          firebaseStorageDownloadTokens: token
+        }
+      }
     });
-    if (error) {
-      console.error('Supabase upload error:', error);
-      return res.status(500).json({ error: error.message || 'Erro ao fazer upload do APK' });
-    }
-    const { data } = supabase.storage.from('midias').getPublicUrl(filename);
-    res.json({ url: data.publicUrl, filename });
+    res.json({ url: buildFirebaseDownloadUrl(bucket.name, path, token), filename: path });
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: e.message || 'Erro ao fazer upload do APK' });
@@ -459,19 +490,7 @@ router.post('/downloads/upload-url', adminAuth, async (req, res) => {
     return res.status(400).json({ error: 'Envie um arquivo .apk' });
   }
   try {
-    const path = buildApkStoragePath(filename);
-    const { data, error } = await supabase.storage.from('midias').createSignedUploadUrl(path);
-    if (error) {
-      console.error('Supabase signed upload error:', error);
-      return res.status(500).json({ error: error.message || 'Erro ao preparar upload do APK' });
-    }
-    const { data: publicData } = supabase.storage.from('midias').getPublicUrl(path);
-    res.json({
-      path,
-      token: data.token,
-      signedUrl: data.signedUrl,
-      url: publicData.publicUrl
-    });
+    res.json(await buildFirebaseApkUpload(filename));
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: e.message || 'Erro ao preparar upload do APK' });
